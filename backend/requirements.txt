@@ -3,9 +3,10 @@ uvicorn[standard]>=0.32.0
 python-dotenv>=1.0.0
 pydantic-settings>=2.6.0
 
-# Tech stack (initial setup)
+# Tech stack
 langgraph>=0.2.0
 langchain-core>=0.3.0
 redis>=5.0.0
-sqlalchemy>=2.0.0
+sqlalchemy[asyncio]>=2.0.0
 asyncpg>=0.29.0
+alembic>=1.14.0
