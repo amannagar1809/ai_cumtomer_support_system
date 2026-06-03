@@ -4,6 +4,7 @@ from app.models.conversation import (
     ConversationChannel,
     ConversationStatus,
 )
+from app.models.message import Message, SenderType
 from app.models.user import CustomerType, User
 
 __all__ = [
@@ -12,5 +13,7 @@ __all__ = [
     "ConversationChannel",
     "ConversationStatus",
     "CustomerType",
+    "Message",
+    "SenderType",
     "User",
 ]
