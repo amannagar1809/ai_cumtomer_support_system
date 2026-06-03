@@ -1,6 +1,6 @@
 # Epic 1.2 — PostgreSQL Schema
 
-**User Story 1.2.1** (partial) · Users + Conversations + Messages  
+**User Story 1.2.1** (partial) · Users, Conversations, Messages, Tickets  
 **Stack:** PostgreSQL 16 · SQLAlchemy 2 · Alembic
 
 ---
@@ -12,6 +12,7 @@
 | `users` | ✅ Complete |
 | `conversations` | ✅ Complete |
 | `messages` (+ `messages_archive`) | ✅ Complete |
+| `tickets` | ✅ Complete |
 | Additional tables | Pending next requirements |
 
 | Artifact | Path |
@@ -19,8 +20,9 @@
 | SQL — users | `backend/db/schema/001_users.sql` |
 | SQL — conversations | `backend/db/schema/002_conversations.sql` |
 | SQL — messages | `backend/db/schema/003_messages.sql` |
-| Models | `user.py`, `conversation.py`, `message.py` |
-| Migrations | `20260602_0001_*` … `20260602_0003_*` |
+| SQL — tickets | `backend/db/schema/004_tickets.sql` |
+| Models | `user.py`, `conversation.py`, `message.py`, `ticket.py` |
+| Migrations | `20260602_0001_*` … `20260602_0004_*` |
 
 ---
 
@@ -259,12 +261,86 @@ Or from application/worker cron calling the same SQL.
 
 ---
 
-## 7. Entity diagram
+## 7. Tickets table definition
+
+| Column | Type | Nullable | Default | Notes |
+|--------|------|----------|---------|-------|
+| `id` | `UUID` | NO | `gen_random_uuid()` | Primary key |
+| `conversation_id` | `UUID` | NO | — | FK → `conversations.id` **ON DELETE CASCADE** |
+| `priority` | `ENUM` | NO | `'medium'` | `low`, `medium`, `high`, `urgent` |
+| `category` | `VARCHAR(50)` | NO | — | e.g. `billing`, `technical` |
+| `status` | `ENUM` | NO | `'open'` | `open`, `in_progress`, `resolved`, `closed` |
+| `assigned_to` | `VARCHAR(100)` | YES | — | Agent id or name |
+| `created_at` | `TIMESTAMP` | NO | `CURRENT_TIMESTAMP` | Ticket opened |
+| `resolved_at` | `TIMESTAMP` | YES | — | Set when resolved/closed |
+
+### 7.1 Indexes
+
+| Index | Column(s) | Purpose |
+|-------|-----------|---------|
+| `ix_tickets_priority` | `priority` | Queue by urgency |
+| `ix_tickets_status` | `status` | Filter open / in-progress boards |
+| `ix_tickets_assigned_to` | `assigned_to` | Agent workload lookup |
+
+### 7.2 Automatic status transition rules
+
+Enforced by trigger `trg_tickets_status_rules` → function `enforce_ticket_status_rules()`.
+
+#### Allowed transitions
+
+| From → To | `open` | `in_progress` | `resolved` | `closed` |
+|-----------|:------:|:-------------:|:----------:|:--------:|
+| **open** | — | ✅ | — | ✅ |
+| **in_progress** | ✅ | — | ✅ | ✅ |
+| **resolved** | ✅ | ✅ | — | ✅ |
+| **closed** | ✅ | ✅ | — | — |
+
+Invalid transitions raise: `Invalid ticket status transition: <old> -> <new>`.
+
+#### Automatic field updates
+
+| Rule | Behavior |
+|------|----------|
+| **New ticket** | Must start as `open`; `resolved_at = NULL` |
+| **→ resolved / closed** | Sets `resolved_at = CURRENT_TIMESTAMP` if not already set |
+| **→ open / in_progress** | Clears `resolved_at = NULL` (reopen) |
+| **CHECK constraint** | `resolved_at` required when status is `resolved` or `closed`; must be NULL when `open` or `in_progress` |
+
+```mermaid
+stateDiagram-v2
+    [*] --> open: INSERT
+    open --> in_progress: assign / start work
+    open --> closed: fast-close
+    in_progress --> open: unassign
+    in_progress --> resolved: fix issue
+    in_progress --> closed: close without resolve
+    resolved --> in_progress: reopen work
+    resolved --> open: reopen
+    resolved --> closed: confirm close
+    closed --> open: reopen
+    closed --> in_progress: resume
+```
+
+**Example — assign and resolve:**
+
+```sql
+INSERT INTO tickets (conversation_id, category)
+VALUES ('...', 'billing');  -- status defaults to open
+
+UPDATE tickets SET status = 'in_progress', assigned_to = 'agent_42' WHERE id = '...';
+UPDATE tickets SET status = 'resolved' WHERE id = '...';
+-- resolved_at set automatically
+```
+
+---
+
+## 8. Entity diagram
 
 ```mermaid
 erDiagram
     users ||--o{ conversations : has
     conversations ||--o{ messages : contains
+    conversations ||--o{ tickets : escalates
 
     users {
         uuid id PK
@@ -304,12 +380,23 @@ erDiagram
         timestamp archived_at
     }
 
+    tickets {
+        uuid id PK
+        uuid conversation_id FK
+        ticket_priority priority
+        varchar_50 category
+        ticket_status status
+        varchar_100 assigned_to
+        timestamp created_at
+        timestamp resolved_at
+    }
+
     messages ||--o| messages_archive : archived_after_90d
 ```
 
 ---
 
-## 8. Apply schema locally
+## 9. Apply schema locally
 
 ```bash
 # From repo root
@@ -330,11 +417,13 @@ Verify:
 \d messages_archive
 SELECT tablename FROM pg_tables WHERE tablename LIKE 'messages_y%';
 SELECT enum_range(NULL::message_sender_type);
+\d tickets
+SELECT enum_range(NULL::ticket_status);
 ```
 
 ---
 
-## 9. Acceptance checklist
+## 10. Acceptance checklist
 
 ### Users table
 
@@ -381,6 +470,23 @@ SELECT enum_range(NULL::message_sender_type);
 | Partition by month | ✅ |
 | Archiving policy > 90 days | ✅ |
 
+### Tickets table
+
+| Requirement | Status |
+|-------------|--------|
+| `id` UUID | ✅ |
+| `conversation_id` FK | ✅ |
+| `priority` ENUM (4 values) | ✅ |
+| `category` VARCHAR(50) | ✅ |
+| `status` ENUM (4 values) | ✅ |
+| `assigned_to` VARCHAR(100) | ✅ |
+| `created_at` TIMESTAMP | ✅ |
+| `resolved_at` TIMESTAMP NULL | ✅ |
+| Index on `priority` | ✅ |
+| Index on `status` | ✅ |
+| Index on `assigned_to` | ✅ |
+| Automatic status transition rules | ✅ |
+
 ---
 
-*Next: share the fourth table requirement for migration `20260602_0004_*`.*
+*Next: share the fifth table requirement for migration `20260602_0005_*`.*
