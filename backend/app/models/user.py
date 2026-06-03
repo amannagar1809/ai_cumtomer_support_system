@@ -1,6 +1,7 @@
 import enum
 import uuid
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     CheckConstraint,
@@ -12,9 +13,12 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
+
+if TYPE_CHECKING:
+    from app.models.conversation import Conversation
 
 
 class CustomerType(str, enum.Enum):
@@ -64,4 +68,9 @@ class User(Base):
         DateTime(timezone=False),
         nullable=False,
         server_default=func.now(),
+    )
+
+    conversations: Mapped[list["Conversation"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
     )
