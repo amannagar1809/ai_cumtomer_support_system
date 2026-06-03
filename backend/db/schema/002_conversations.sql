@@ -25,4 +25,4 @@ CREATE TABLE conversations (
 CREATE INDEX ix_conversations_user_id_status ON conversations (user_id, status);
 
 COMMENT ON TABLE conversations IS 'Support chat sessions per user and channel';
-COMMENT ON COLUMN conversations.ended_at IS 'NULL while conversation is open';
+COMMENT ON COLUMN conversations.ended_at IS 'NULL while conversation is open ';
