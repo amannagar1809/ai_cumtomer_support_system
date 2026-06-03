@@ -1,6 +1,6 @@
 # Epic 1.2 — PostgreSQL Schema
 
-**User Story 1.2.1** (partial) · Users + Conversations tables  
+**User Story 1.2.1** (partial) · Users + Conversations + Messages  
 **Stack:** PostgreSQL 16 · SQLAlchemy 2 · Alembic
 
 ---
@@ -11,14 +11,16 @@
 |-------|--------|
 | `users` | ✅ Complete |
 | `conversations` | ✅ Complete |
+| `messages` (+ `messages_archive`) | ✅ Complete |
 | Additional tables | Pending next requirements |
 
 | Artifact | Path |
 |----------|------|
 | SQL — users | `backend/db/schema/001_users.sql` |
 | SQL — conversations | `backend/db/schema/002_conversations.sql` |
-| Models | `backend/app/models/user.py`, `conversation.py` |
-| Migrations | `20260602_0001_*`, `20260602_0002_*` |
+| SQL — messages | `backend/db/schema/003_messages.sql` |
+| Models | `user.py`, `conversation.py`, `message.py` |
+| Migrations | `20260602_0001_*` … `20260602_0003_*` |
 
 ---
 
@@ -155,11 +157,114 @@ PostgreSQL uses `ix_conversations_user_id_status` for `(user_id, status)` filter
 
 ---
 
-## 6. Entity diagram
+## 6. Messages table definition
+
+| Column | Type | Nullable | Default | Notes |
+|--------|------|----------|---------|-------|
+| `id` | `UUID` | NO | `gen_random_uuid()` | Part of composite PK |
+| `conversation_id` | `UUID` | NO | — | FK → `conversations.id` **ON DELETE CASCADE** |
+| `sender_type` | `ENUM` | NO | — | `customer`, `ai`, `human_agent` |
+| `message` | `TEXT` | NO | — | Full message body |
+| `language` | `VARCHAR(10)` | NO | `'en'` | Message language |
+| `sentiment` | `JSONB` | YES | — | e.g. `{"score": 0.82, "label": "positive"}` |
+| `timestamp` | `TIMESTAMP` | NO | `CURRENT_TIMESTAMP` | Partition key + part of PK |
+
+> **Composite PK `(id, timestamp)`:** PostgreSQL requires the partition key in every unique constraint. `id` remains a UUID and is globally unique in practice.
+
+### 6.1 Enum: `message_sender_type`
+
+```sql
+CREATE TYPE message_sender_type AS ENUM ('customer', 'ai', 'human_agent');
+```
+
+### 6.2 Full-text search index
+
+```sql
+CREATE INDEX ix_messages_message_fts
+    ON messages USING GIN (to_tsvector('english', message));
+```
+
+**Search example:**
+
+```sql
+SELECT id, conversation_id, message, "timestamp"
+FROM messages
+WHERE to_tsvector('english', message) @@ plainto_tsquery('english', 'refund order')
+ORDER BY "timestamp" DESC
+LIMIT 20;
+```
+
+The same GIN index exists on `messages_archive` for historical search.
+
+### 6.3 Monthly partition strategy
+
+Parent table partitioned by **RANGE** on `"timestamp"`:
+
+```sql
+CREATE TABLE messages ( ... ) PARTITION BY RANGE ("timestamp");
+```
+
+Child partitions: `messages_y2026m06`, `messages_y2026m07`, …
+
+| Function | Purpose |
+|----------|---------|
+| `create_messages_partition(year, month)` | Create one monthly partition if missing |
+| `ensure_messages_partitions(months_ahead)` | Bootstrap current month + N future months |
+
+**Run monthly (cron / pg_cron):**
+
+```sql
+SELECT ensure_messages_partitions(3);  -- keep 3 months ahead provisioned
+```
+
+**Benefits:**
+- Queries with `timestamp` range scan only relevant partitions (partition pruning)
+- Old months can be detached/dropped after archive without full-table locks
+- Smaller indexes per month → faster FTS and inserts
+
+### 6.4 Archiving policy (90 days)
+
+| Tier | Table | Retention | Action |
+|------|-------|-----------|--------|
+| **Hot** | `messages` (partitions) | **≤ 90 days** | Active reads/writes |
+| **Cold** | `messages_archive` | Long-term | Rows moved after 90 days |
+
+**Archive function:**
+
+```sql
+SELECT archive_messages_older_than(90);  -- returns count of rows moved
+```
+
+**What it does:**
+1. `DELETE FROM messages WHERE timestamp < now() - 90 days`
+2. `INSERT` deleted rows into `messages_archive` (adds `archived_at`)
+3. Returns number of archived rows
+
+**Schedule (recommended daily, off-peak):**
+
+```sql
+-- pg_cron example
+SELECT cron.schedule('archive-messages', '0 3 * * *',
+    $$SELECT archive_messages_older_than(90)$$);
+```
+
+Or from application/worker cron calling the same SQL.
+
+**Policy summary:**
+
+| Age | Location | Query target |
+|-----|----------|--------------|
+| 0–90 days | `messages` | Real-time chat, FTS |
+| 90+ days | `messages_archive` | Compliance, analytics, audit |
+
+---
+
+## 7. Entity diagram
 
 ```mermaid
 erDiagram
     users ||--o{ conversations : has
+    conversations ||--o{ messages : contains
 
     users {
         uuid id PK
@@ -179,11 +284,32 @@ erDiagram
         timestamp started_at
         timestamp ended_at
     }
+
+    messages {
+        uuid id PK
+        uuid conversation_id FK
+        message_sender_type sender_type
+        text message
+        varchar_10 language
+        jsonb sentiment
+        timestamp timestamp PK
+    }
+
+    messages_archive {
+        uuid id PK
+        uuid conversation_id
+        message_sender_type sender_type
+        text message
+        timestamp timestamp PK
+        timestamp archived_at
+    }
+
+    messages ||--o| messages_archive : archived_after_90d
 ```
 
 ---
 
-## 7. Apply schema locally
+## 8. Apply schema locally
 
 ```bash
 # From repo root
@@ -200,12 +326,15 @@ Verify:
 ```sql
 \d users
 \d conversations
-SELECT enum_range(NULL::conversation_channel);
+\d messages
+\d messages_archive
+SELECT tablename FROM pg_tables WHERE tablename LIKE 'messages_y%';
+SELECT enum_range(NULL::message_sender_type);
 ```
 
 ---
 
-## 8. Acceptance checklist
+## 9. Acceptance checklist
 
 ### Users table
 
@@ -237,6 +366,21 @@ SELECT enum_range(NULL::conversation_channel);
 | Composite index `(user_id, status)` | ✅ |
 | FK `ON DELETE CASCADE` | ✅ |
 
+### Messages table
+
+| Requirement | Status |
+|-------------|--------|
+| `id` UUID | ✅ |
+| `conversation_id` FK | ✅ |
+| `sender_type` ENUM (3 values) | ✅ |
+| `message` TEXT | ✅ |
+| `language` VARCHAR(10) | ✅ |
+| `sentiment` JSONB | ✅ |
+| `timestamp` TIMESTAMP | ✅ |
+| Full-text search index on `message` | ✅ |
+| Partition by month | ✅ |
+| Archiving policy > 90 days | ✅ |
+
 ---
 
-*Next: share the third table requirement for migration `20260602_0003_*`.*
+*Next: share the fourth table requirement for migration `20260602_0004_*`.*
