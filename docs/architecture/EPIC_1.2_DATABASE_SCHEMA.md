@@ -1,19 +1,24 @@
 # Epic 1.2 — PostgreSQL Schema
 
-**User Story 1.2.1** (partial) · Users table only  
+**User Story 1.2.1** (partial) · Users + Conversations tables  
 **Stack:** PostgreSQL 16 · SQLAlchemy 2 · Alembic
 
 ---
 
 ## 1. Scope
 
-This deliverable covers **only the Users table**. Additional tables will be documented and migrated when you share the next requirements.
+| Table | Status |
+|-------|--------|
+| `users` | ✅ Complete |
+| `conversations` | ✅ Complete |
+| Additional tables | Pending next requirements |
 
 | Artifact | Path |
 |----------|------|
-| SQL reference | `backend/db/schema/001_users.sql` |
-| SQLAlchemy model | `backend/app/models/user.py` |
-| Alembic migration | `backend/alembic/versions/20260602_0001_create_users_table.py` |
+| SQL — users | `backend/db/schema/001_users.sql` |
+| SQL — conversations | `backend/db/schema/002_conversations.sql` |
+| Models | `backend/app/models/user.py`, `conversation.py` |
+| Migrations | `20260602_0001_*`, `20260602_0002_*` |
 
 ---
 
@@ -88,10 +93,74 @@ Uses **E.164** so one rule covers all countries (no separate column per country)
 
 ---
 
-## 5. Entity diagram (Users only)
+## 5. Conversations table definition
+
+| Column | Type | Nullable | Default | Notes |
+|--------|------|----------|---------|-------|
+| `id` | `UUID` | NO | `gen_random_uuid()` | Primary key |
+| `user_id` | `UUID` | NO | — | FK → `users.id` **ON DELETE CASCADE** |
+| `channel` | `ENUM` | NO | — | `web`, `whatsapp`, `email`, `telegram`, `mobile` |
+| `status` | `ENUM` | NO | `'active'` | `active`, `resolved`, `escalated`, `closed` |
+| `started_at` | `TIMESTAMP` | NO | `CURRENT_TIMESTAMP` | Session start |
+| `ended_at` | `TIMESTAMP` | YES | — | Set when conversation closes |
+
+### 5.1 Enum: `conversation_channel`
+
+```sql
+CREATE TYPE conversation_channel AS ENUM (
+  'web', 'whatsapp', 'email', 'telegram', 'mobile'
+);
+```
+
+### 5.2 Enum: `conversation_status`
+
+```sql
+CREATE TYPE conversation_status AS ENUM (
+  'active', 'resolved', 'escalated', 'closed'
+);
+```
+
+| Status | Meaning |
+|--------|---------|
+| `active` | Ongoing AI or agent session |
+| `resolved` | Issue solved, no agent needed |
+| `escalated` | Handed off to human agent |
+| `closed` | Terminal state (archived) |
+
+### 5.3 Foreign key
+
+```sql
+FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+```
+
+Deleting a **user** automatically deletes all their **conversations** (and any future child rows that CASCADE from conversations).
+
+### 5.4 Composite index
+
+```sql
+CREATE INDEX ix_conversations_user_id_status ON conversations (user_id, status);
+```
+
+**Optimized query (active lookup):**
+
+```sql
+SELECT id, channel, started_at
+FROM conversations
+WHERE user_id = $1 AND status = 'active'
+ORDER BY started_at DESC
+LIMIT 1;
+```
+
+PostgreSQL uses `ix_conversations_user_id_status` for `(user_id, status)` filters.
+
+---
+
+## 6. Entity diagram
 
 ```mermaid
 erDiagram
+    users ||--o{ conversations : has
+
     users {
         uuid id PK
         varchar_100 name
@@ -101,11 +170,20 @@ erDiagram
         customer_type customer_type
         timestamp created_at
     }
+
+    conversations {
+        uuid id PK
+        uuid user_id FK
+        conversation_channel channel
+        conversation_status status
+        timestamp started_at
+        timestamp ended_at
+    }
 ```
 
 ---
 
-## 6. Apply schema locally
+## 7. Apply schema locally
 
 ```bash
 # From repo root
@@ -121,12 +199,15 @@ Verify:
 
 ```sql
 \d users
-SELECT enum_range(NULL::customer_type);
+\d conversations
+SELECT enum_range(NULL::conversation_channel);
 ```
 
 ---
 
-## 7. Acceptance checklist (Users table)
+## 8. Acceptance checklist
+
+### Users table
 
 | Requirement | Status |
 |-------------|--------|
@@ -143,6 +224,19 @@ SELECT enum_range(NULL::customer_type);
 | Email format validation | ✅ |
 | Phone format (international / per country via E.164) | ✅ |
 
+### Conversations table
+
+| Requirement | Status |
+|-------------|--------|
+| `id` UUID | ✅ |
+| `user_id` FK → users | ✅ |
+| `channel` ENUM (5 values) | ✅ |
+| `status` ENUM (4 values) | ✅ |
+| `started_at` TIMESTAMP | ✅ |
+| `ended_at` TIMESTAMP NULL | ✅ |
+| Composite index `(user_id, status)` | ✅ |
+| FK `ON DELETE CASCADE` | ✅ |
+
 ---
 
-*Next: share the second table requirement to extend this document and add migration `20260602_0002_*`.*
+*Next: share the third table requirement for migration `20260602_0003_*`.*
