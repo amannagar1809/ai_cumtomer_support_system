@@ -5,6 +5,7 @@ from app.models.conversation import (
     ConversationStatus,
 )
 from app.models.message import Message, SenderType
+from app.models.ticket import Ticket, TicketPriority, TicketStatus
 from app.models.user import CustomerType, User
 
 __all__ = [
@@ -15,5 +16,8 @@ __all__ = [
     "CustomerType",
     "Message",
     "SenderType",
+    "Ticket",
+    "TicketPriority",
+    "TicketStatus",
     "User",
 ]
