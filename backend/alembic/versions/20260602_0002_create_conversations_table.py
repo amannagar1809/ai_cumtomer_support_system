@@ -25,7 +25,7 @@ conversation_channel_enum = postgresql.ENUM(
     "telegram",
     "mobile",
     name="conversation_channel",
-    create_type=True,
+    create_type=False,
 )
 
 conversation_status_enum = postgresql.ENUM(
@@ -34,7 +34,7 @@ conversation_status_enum = postgresql.ENUM(
     "escalated",
     "closed",
     name="conversation_status",
-    create_type=True,
+    create_type=False,
 )
 
 

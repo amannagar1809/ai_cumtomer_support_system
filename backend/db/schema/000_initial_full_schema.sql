@@ -1,0 +1,13 @@
+-- Epic 1.2 · User Story 1.2.2 — Full schema bootstrap (reference)
+--
+-- Recommended: apply all migrations via Alembic
+--   cd backend && python -m alembic upgrade head
+--
+-- Manual order (psql -f each file):
+--   001_users.sql
+--   002_conversations.sql
+--   003_messages.sql
+--   004_tickets.sql
+--
+-- After manual apply, stamp Alembic:
+--   python -m alembic stamp head
