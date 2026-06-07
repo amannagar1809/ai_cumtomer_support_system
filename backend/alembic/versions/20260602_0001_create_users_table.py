@@ -23,7 +23,7 @@ customer_type_enum = postgresql.ENUM(
     "premium",
     "vip",
     name="customer_type",
-    create_type=True,
+    create_type=False,
 )
 
 

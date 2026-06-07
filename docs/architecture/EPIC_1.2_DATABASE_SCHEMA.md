@@ -489,4 +489,12 @@ SELECT enum_range(NULL::ticket_status);
 
 ---
 
-*Next: share the fifth table requirement for migration `20260602_0005_*`.*
+---
+
+## Related documents
+
+- [EPIC_1.2_MIGRATIONS_AND_BACKUP.md](./EPIC_1.2_MIGRATIONS_AND_BACKUP.md) — User Story 1.2.2 (Alembic, backups, PITR, replica)
+
+---
+
+*Next: share additional table requirements for migration `20260602_0005_*` if any.*
