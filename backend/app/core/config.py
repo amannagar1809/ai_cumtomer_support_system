@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     redis_session_ttl_seconds: int = 86400  # 24 hours
     redis_chat_memory_ttl_seconds: int = 1800  # 30 minutes
     redis_user_context_ttl_seconds: int = 604800  # 7 days
+    rate_limit_user_messages_per_minute: int = 10
+    rate_limit_ip_requests_per_minute: int = 1000
     openai_api_key: str | None = None
 
     backup_dir: str = "./backups/postgres"
