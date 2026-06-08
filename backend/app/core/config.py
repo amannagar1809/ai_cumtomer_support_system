@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     redis_user_context_ttl_seconds: int = 604800  # 7 days
     rate_limit_user_messages_per_minute: int = 10
     rate_limit_ip_requests_per_minute: int = 1000
+    redis_queue_url: str = "redis://localhost:6379/2"
+    queue_max_retry_attempts: int = 3
+    queue_retry_base_seconds: int = 1
+    queue_consumer_block_ms: int = 5000
     openai_api_key: str | None = None
 
     backup_dir: str = "./backups/postgres"
