@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     redis_chat_memory_url: str = "redis://localhost:6379/1"
     redis_session_ttl_seconds: int = 86400  # 24 hours
     redis_chat_memory_ttl_seconds: int = 1800  # 30 minutes
+    redis_user_context_ttl_seconds: int = 604800  # 7 days
     openai_api_key: str | None = None
 
     backup_dir: str = "./backups/postgres"
