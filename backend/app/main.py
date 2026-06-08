@@ -1,10 +1,19 @@
-from fastapi import FastAPI
+from contextlib import asynccontextmanager
+
 import asyncpg
-import redis.asyncio as redis
+from fastapi import FastAPI
 
 from app.core.config import settings
+from app.core.redis import close_redis, get_redis_client
 
-app = FastAPI(title="AI Customer Support System")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    await close_redis()
+
+
+app = FastAPI(title="AI Customer Support System", lifespan=lifespan)
 
 
 @app.get("/health")
@@ -14,16 +23,11 @@ def health():
 
 @app.get("/health/ready")
 async def readiness():
-    """
-    Lightweight dependency check for local/dev.
-    If Redis/Postgres aren't running yet, it reports not-ready instead of crashing.
-    """
     checks: dict[str, str] = {}
 
     try:
-        r = redis.from_url(settings.redis_url, socket_connect_timeout=2, socket_timeout=2)
-        await r.ping()
-        await r.aclose()
+        redis = get_redis_client()
+        await redis.ping()
         checks["redis"] = "ok"
     except Exception as e:
         checks["redis"] = f"not-ready: {type(e).__name__}"
