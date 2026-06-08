@@ -255,7 +255,7 @@ class MessageQueueService:
             correlation_id=correlation,
             created_at=created_at,
             attempt=int(fields.get("attempt", "0")),
-            not_before=float(fields.get("not_before", "0")),
+            not_before=float(fields.get("not_before", "0")), 
             last_error=fields.get("last_error"),
         )
 
