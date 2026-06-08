@@ -6,6 +6,7 @@ from app.core.config import settings
 
 _redis_client: redis.Redis | None = None
 _chat_memory_client: redis.Redis | None = None
+_queue_client: redis.Redis | None = None
 
 
 def get_redis_client() -> redis.Redis:
@@ -32,15 +33,30 @@ def get_chat_memory_redis_client() -> redis.Redis:
     return _chat_memory_client
 
 
+def get_queue_redis_client() -> redis.Redis:
+    """Redis DB 2 — job queues (Redis Streams)."""
+    global _queue_client
+    if _queue_client is None:
+        _queue_client = redis.from_url(
+            settings.redis_queue_url,
+            encoding="utf-8",
+            decode_responses=True,
+        )
+    return _queue_client
+
+
 async def get_redis() -> AsyncGenerator[redis.Redis, None]:
     yield get_redis_client()
 
 
 async def close_redis() -> None:
-    global _redis_client, _chat_memory_client
+    global _redis_client, _chat_memory_client, _queue_client
     if _redis_client is not None:
         await _redis_client.aclose()
         _redis_client = None
     if _chat_memory_client is not None:
         await _chat_memory_client.aclose()
         _chat_memory_client = None
+    if _queue_client is not None:
+        await _queue_client.aclose()
+        _queue_client = None
