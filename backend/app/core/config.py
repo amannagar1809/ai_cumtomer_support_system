@@ -22,7 +22,9 @@ class Settings(BaseSettings):
         "postgresql+asyncpg://analytics_reader:analytics_pass@localhost:15433/ai_support"
     )
     redis_url: str = "redis://localhost:6379/0"
+    redis_chat_memory_url: str = "redis://localhost:6379/1"
     redis_session_ttl_seconds: int = 86400  # 24 hours
+    redis_chat_memory_ttl_seconds: int = 1800  # 30 minutes
     openai_api_key: str | None = None
 
     backup_dir: str = "./backups/postgres"
