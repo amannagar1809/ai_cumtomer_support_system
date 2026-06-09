@@ -350,12 +350,33 @@ class ChatSessionService:
             await self._sessions.touch(user.id, session_id)
         await db.commit()
 
+        from app.services.ai_response import AiResponseService
+
+        AiResponseService().schedule(conversation_id, content)
+
         return SendMessageResponse(
             message=self._messages.message_to_response(
                 row,
                 role=ChatMemoryRole.customer.value,
             )
         )
+
+    async def persist_ai_reply(
+        self,
+        db: AsyncSession,
+        conversation_id: UUID,
+        content: str,
+        *,
+        language: str = "en",
+    ) -> Message:
+        row, _ = await self._persist_and_cache_message(
+            db,
+            conversation_id,
+            ChatMemoryRole.ai,
+            content,
+            language=language,
+        )
+        return row
 
     async def _resume_session(
         self,

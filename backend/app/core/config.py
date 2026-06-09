@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     )
     chat_inactivity_trigger_seconds: int = 30
     chat_history_message_limit: int = 10
+    chat_ai_processing_delay_seconds: float = 6.0
+    chat_typing_still_working_after_seconds: int = 5
+    chat_ws_heartbeat_interval_seconds: int = 25
+    chat_ws_pong_timeout_seconds: int = 10
     storage_provider: str = "local"
     storage_bucket: str = "ai-support-uploads"
     storage_region: str = "us-east-1"
