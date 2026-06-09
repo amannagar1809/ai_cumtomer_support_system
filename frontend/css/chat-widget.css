@@ -38,6 +38,68 @@ body {
   line-height: 1.6;
 }
 
+.chat-continue-banner {
+  position: fixed;
+  right: 1.5rem;
+  bottom: 5.5rem;
+  width: min(320px, calc(100vw - 2rem));
+  z-index: 998;
+  animation: slideUp 0.3s ease;
+}
+
+.chat-continue-content {
+  padding: 1rem 1.1rem;
+  border-radius: 1rem;
+  background: var(--chat-bg);
+  border: 1px solid var(--chat-border);
+  box-shadow: var(--chat-shadow);
+}
+
+.chat-continue-title {
+  margin: 0 0 0.35rem;
+  font-weight: 600;
+  font-size: 0.98rem;
+}
+
+.chat-continue-subtitle {
+  margin: 0 0 0.85rem;
+  color: var(--chat-muted);
+  font-size: 0.85rem;
+}
+
+.chat-continue-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.btn-continue,
+.btn-new-chat {
+  padding: 0.65rem 0.9rem;
+  border-radius: 999px;
+  font-size: 0.88rem;
+  cursor: pointer;
+  border: none;
+}
+
+.btn-continue {
+  background: var(--chat-primary);
+  color: #fff;
+}
+
+.btn-new-chat {
+  background: #fff;
+  color: var(--chat-text);
+  border: 1px solid var(--chat-border);
+}
+
+.chat-header-meta {
+  margin: 0.2rem 0 0;
+  font-size: 0.75rem;
+  opacity: 0.9;
+  font-weight: 400;
+}
+
 .chat-launcher {
   position: fixed;
   right: 1.5rem;

@@ -58,3 +58,17 @@ class ChatMemoryService:
     async def clear(self, conversation_id: UUID | str) -> bool:
         deleted = await self._redis.delete(chat_memory_key(conversation_id))
         return deleted > 0
+
+    async def load_messages(
+        self,
+        conversation_id: UUID | str,
+        messages: list[ChatMemoryMessage],
+    ) -> None:
+        """Replace Redis transcript (e.g. hydrate from Postgres on continue)."""
+        key = chat_memory_key(conversation_id)
+        await self._redis.delete(key)
+        if not messages:
+            return
+        for message in messages:
+            await self._redis.rpush(key, message.model_dump_json())
+        await self._redis.expire(key, self._ttl)
