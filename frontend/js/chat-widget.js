@@ -1,3 +1,4 @@
+import { ChatSocket } from "./chat-socket.js";
 import { FileUploadManager } from "./file-upload.js";
 import { TicketPanel } from "./ticket-panel.js";
 import {
@@ -25,6 +26,9 @@ class ChatWidget {
     this.pendingFiles = [];
     this.uploadManager = null;
     this.ticketPanel = null;
+    this.chatSocket = null;
+    this.typingState = "idle";
+    this.stillWorkingTimer = null;
     this.render();
     this.bindActivityTracking();
     this.initSession();
@@ -64,7 +68,12 @@ class ChatWidget {
           </div>
         </header>
         <div id="ticket-panel-root"></div>
-        <div class="chat-messages" id="chat-messages"></div>
+        <div class="chat-messages" id="chat-messages">
+          <div class="chat-typing-indicator hidden" id="chat-typing-indicator" aria-live="polite">
+            <span class="typing-dots" aria-hidden="true"><span></span><span></span><span></span></span>
+            <span class="typing-label" id="chat-typing-label">Agent is typing</span>
+          </div>
+        </div>
         <div class="chat-status" id="chat-status">Connecting...</div>
         <div class="chat-upload-zone hidden" id="chat-upload-zone">
           <p>Drag and drop files here</p>
@@ -98,6 +107,8 @@ class ChatWidget {
     this.filePreviews = document.getElementById("chat-file-previews");
     this.ticketsBtn = document.getElementById("chat-tickets-btn");
     this.ticketPanelRoot = document.getElementById("ticket-panel-root");
+    this.typingIndicator = document.getElementById("chat-typing-indicator");
+    this.typingLabel = document.getElementById("chat-typing-label");
 
     this.bindUploadHandlers();
     this.ticketsBtn.addEventListener("click", () => {
@@ -134,7 +145,80 @@ class ChatWidget {
       } else {
         this.ticketPanel.updateSession(session);
       }
+      this.connectChatSocket(session);
     }
+  }
+
+  connectChatSocket(session) {
+    if (!this.chatSocket) {
+      this.chatSocket = new ChatSocket({
+        onEvent: (data) => this.handleSocketEvent(data),
+        onConnectionChange: (state) => this.handleSocketConnection(state),
+      });
+    }
+    this.chatSocket.connect(session);
+  }
+
+  handleSocketConnection(state) {
+    if (state === "connected") {
+      if (this.typingState === "idle") {
+        this.setStatus("Live connection active.");
+      }
+      return;
+    }
+    if (state === "connecting") {
+      this.setStatus("Connecting to live updates...");
+      return;
+    }
+    if (state === "stale" || state === "error" || state === "disconnected") {
+      if (this.typingState !== "idle") {
+        this.hideTypingIndicator();
+      }
+      if (state === "stale") {
+        this.setStatus("Connection interrupted. Reconnecting...");
+      }
+    }
+  }
+
+  handleSocketEvent(data) {
+    switch (data.event) {
+      case "typing_start":
+        this.showTypingIndicator("Agent is typing");
+        break;
+      case "still_working":
+        this.showTypingIndicator(
+          data.payload?.message || "Still working on your request...",
+        );
+        break;
+      case "typing_stop":
+        this.hideTypingIndicator();
+        break;
+      case "message":
+        if (data.payload?.role === "ai" && data.payload?.content) {
+          this.appendMessage(
+            "ai",
+            data.payload.content,
+            data.payload.timestamp || new Date().toISOString(),
+          );
+        }
+        break;
+      default:
+        break;
+    }
+  }
+
+  showTypingIndicator(label = "Agent is typing") {
+    this.typingState = "typing";
+    this.typingLabel.textContent = label;
+    this.typingIndicator.classList.remove("hidden");
+    this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+  }
+
+  hideTypingIndicator() {
+    this.typingState = "idle";
+    this.typingIndicator.classList.add("hidden");
+    this.typingLabel.textContent = "Agent is typing";
+    clearTimeout(this.stillWorkingTimer);
   }
 
   bindUploadHandlers() {
@@ -493,7 +577,9 @@ class ChatWidget {
   }
 
   renderMessages(messages) {
+    const typingNode = this.typingIndicator;
     this.messagesEl.innerHTML = "";
+    this.messagesEl.appendChild(typingNode);
     for (const msg of messages) {
       const role = msg.role === "customer" ? "user" : msg.role;
       this.appendMessage(role, msg.content, msg.timestamp, msg.attachments || []);
@@ -520,7 +606,11 @@ class ChatWidget {
     const time = timestamp ? new Date(timestamp).toLocaleTimeString() : "";
     const body = content ? `<p>${this.escapeHtml(content)}</p>` : "";
     el.innerHTML = `${body}${this.renderAttachmentHtml(attachments, role)}${time ? `<time>${time}</time>` : ""}`;
-    this.messagesEl.appendChild(el);
+    if (this.typingIndicator?.parentElement === this.messagesEl) {
+      this.messagesEl.insertBefore(el, this.typingIndicator);
+    } else {
+      this.messagesEl.appendChild(el);
+    }
     this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
   }
 
@@ -560,7 +650,7 @@ class ChatWidget {
         saveLastConversation(this.session.conversation_id, now);
         this.setHeaderMeta(now);
         this.clearPendingFiles();
-        this.setStatus("Message received — AI replies coming in a future story.");
+        this.setStatus("Message sent. Waiting for agent response...");
       } else {
         const err = await res.json().catch(() => ({}));
         this.setStatus(err.detail || "Failed to send message.");
@@ -596,6 +686,10 @@ class ChatWidget {
     this.panel.classList.add("hidden");
     this.launcher.classList.remove("hidden");
     this.resetInactivityTimer();
+  }
+
+  destroy() {
+    this.chatSocket?.disconnect();
   }
 
   escapeHtml(text) {

@@ -430,6 +430,60 @@ body {
   opacity: 0.7;
 }
 
+.chat-typing-indicator {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  max-width: 85%;
+  margin-bottom: 0.75rem;
+  padding: 0.65rem 0.9rem;
+  background: #fff;
+  border: 1px solid var(--chat-border);
+  border-radius: 1rem;
+  border-bottom-left-radius: 0.25rem;
+  font-size: 0.85rem;
+  color: var(--chat-muted);
+}
+
+.chat-typing-indicator.hidden {
+  display: none;
+}
+
+.typing-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.typing-dots span {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: var(--chat-muted);
+  animation: typing-bounce 1.2s infinite ease-in-out;
+}
+
+.typing-dots span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.typing-dots span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes typing-bounce {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.45;
+  }
+  30% {
+    transform: translateY(-0.2rem);
+    opacity: 1;
+  }
+}
+
 .chat-status {
   padding: 0.5rem 1rem;
   font-size: 0.8rem;

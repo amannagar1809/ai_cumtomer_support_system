@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.deps import get_client_ip
+from app.api.ws.chat import router as chat_ws_router
 from app.api.v1.chat import router as chat_router
 from app.api.v1.tickets import router as tickets_router
 from app.api.v1.uploads import router as uploads_router
@@ -46,7 +47,11 @@ class IpRateLimitMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
-        if path in self.SKIP_PATHS or path.startswith("/static"):
+        if (
+            path in self.SKIP_PATHS
+            or path.startswith("/static")
+            or path.startswith("/ws/")
+        ):
             return await call_next(request)
         limiter = RateLimiterService()
         try:
@@ -69,6 +74,7 @@ app.add_middleware(IpRateLimitMiddleware)
 app.include_router(chat_router, prefix="/api/v1")
 app.include_router(uploads_router, prefix="/api/v1")
 app.include_router(tickets_router, prefix="/api/v1")
+app.include_router(chat_ws_router)
 
 if _FRONTEND_DIR.exists():
     app.mount("/static", StaticFiles(directory=_FRONTEND_DIR), name="static")

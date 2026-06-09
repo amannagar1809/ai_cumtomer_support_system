@@ -245,3 +245,23 @@ See [architecture/EPIC_1.1_DATA_FLOW.md](./architecture/EPIC_1.1_DATA_FLOW.md)
 - API: `GET /api/v1/chat/tickets`, `GET /api/v1/chat/tickets/{ticket_id}`, `POST /api/v1/chat/tickets/{ticket_id}/reopen`, `GET /api/v1/chat/tickets/events/stream` (SSE)
 - Services: `ticket_service.py`, `ticket_events.py`
 - Frontend: `ticket-panel.js`, My Tickets overlay in chat widget
+
+### User Story 2.1.5
+
+**As a** Customer  
+**I want to** see when the agent is typing  
+**So that** I know the system is working on my request.
+
+#### Tasks
+
+- [x] Emit `typing_start` WebSocket event when AI starts processing
+- [x] Show typing indicator animation (3 dots) in chat window
+- [x] Emit `typing_stop` when response is ready
+- [x] Handle edge case: long processing time (show "Still working..." after 5 seconds)
+- [x] Implement heartbeat mechanism to detect connection issues
+
+#### Deliverable
+
+- WebSocket: `WS /ws/v1/chat` with `typing_start`, `typing_stop`, `still_working`, `message`, `ping`/`pong` events
+- Services: `chat_websocket.py`, `ai_response.py`
+- Frontend: `chat-socket.js`, animated typing indicator in chat widget
