@@ -202,3 +202,24 @@ See [architecture/EPIC_1.1_DATA_FLOW.md](./architecture/EPIC_1.1_DATA_FLOW.md)
 - API: `GET /api/v1/chat/returning-user`, `POST /api/v1/chat/conversations/{id}/continue`, `GET /api/v1/chat/conversations/{id}/messages`
 - Service: `backend/app/services/message_store.py`
 - Frontend: continue banner, relative time labels, `last_conversation_id` in localStorage
+### User Story 2.1.3
+
+**As a** Customer  
+**I want to** upload files (screenshots, documents)  
+**So that** I can better explain my issue.
+
+#### Tasks
+
+- [x] File upload button with drag-and-drop zone
+- [x] Validate file types: images (jpg, png), PDF, text files
+- [x] Enforce 10MB per file, 3 files per message
+- [x] Chunked upload with progress indicator
+- [x] Secure S3/GCS pre-signed URLs (local signed URLs for dev)
+- [x] Pass file URLs to LangGraph via analytics queue (OCR flag)
+- [x] Thumbnail previews of uploaded files
+
+#### Deliverable
+
+- API: `POST /api/v1/chat/uploads/init`, `PUT .../chunks/{n}`, `POST .../complete`
+- Services: `file_upload.py`, `storage/`, `langgraph_attachments.py`
+- Frontend: `file-upload.js`, drag-and-drop UI, previews

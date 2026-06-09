@@ -273,6 +273,147 @@ body {
   background: #fff;
 }
 
+.chat-upload-zone {
+  margin: 0 0.85rem;
+  padding: 0.75rem;
+  border: 1.5px dashed var(--chat-border);
+  border-radius: 0.75rem;
+  background: #f8fafc;
+  text-align: center;
+  font-size: 0.82rem;
+  color: var(--chat-muted);
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.chat-upload-zone.dragover {
+  border-color: var(--chat-primary);
+  background: #eff6ff;
+  color: var(--chat-primary);
+}
+
+.chat-upload-zone input[type="file"] {
+  display: none;
+}
+
+.chat-upload-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.85rem 0;
+  background: #fff;
+}
+
+.chat-attach-btn {
+  padding: 0.45rem 0.75rem;
+  border: 1px solid var(--chat-border);
+  border-radius: 999px;
+  background: #fff;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.chat-attach-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.chat-file-previews {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.5rem 0.85rem 0;
+  background: #fff;
+}
+
+.chat-file-preview {
+  position: relative;
+  width: 72px;
+  text-align: center;
+}
+
+.chat-file-preview img,
+.chat-file-preview .file-icon {
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: 0.5rem;
+  border: 1px solid var(--chat-border);
+  background: #f1f5f9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.5rem;
+}
+
+.chat-file-preview .file-name {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 0.65rem;
+  color: var(--chat-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-file-preview .progress-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 1.1rem;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.8);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.chat-file-preview .progress-bar span {
+  display: block;
+  height: 100%;
+  background: var(--chat-primary);
+  width: 0%;
+  transition: width 0.15s ease;
+}
+
+.chat-file-preview .remove-file {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 50%;
+  background: #ef4444;
+  color: #fff;
+  font-size: 0.75rem;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.chat-message-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.5rem;
+}
+
+.chat-message-attachments img {
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  border-radius: 0.4rem;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+}
+
+.chat-message-attachments .attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0.45rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.15);
+  font-size: 0.72rem;
+}
+
 .chat-input-area {
   display: flex;
   gap: 0.5rem;

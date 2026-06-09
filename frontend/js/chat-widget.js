@@ -1,3 +1,4 @@
+import { FileUploadManager } from "./file-upload.js";
 import {
   clearSession,
   getOrCreateAnonymousUserId,
@@ -20,6 +21,8 @@ class ChatWidget {
     this.returningUser = null;
     this.inactivityTimer = null;
     this.proactiveShown = false;
+    this.pendingFiles = [];
+    this.uploadManager = null;
     this.render();
     this.bindActivityTracking();
     this.initSession();
@@ -57,6 +60,15 @@ class ChatWidget {
         </header>
         <div class="chat-messages" id="chat-messages"></div>
         <div class="chat-status" id="chat-status">Connecting...</div>
+        <div class="chat-upload-zone hidden" id="chat-upload-zone">
+          <p>Drag and drop files here</p>
+          <p>JPG, PNG, PDF, TXT · max 10MB · up to 3 files</p>
+          <input id="chat-file-input" type="file" multiple accept=".jpg,.jpeg,.png,.pdf,.txt,image/jpeg,image/png,application/pdf,text/plain" />
+        </div>
+        <div class="chat-upload-toolbar">
+          <button type="button" class="chat-attach-btn" id="chat-attach-btn" disabled>Attach file</button>
+        </div>
+        <div class="chat-file-previews" id="chat-file-previews"></div>
         <form class="chat-input-area" id="chat-form">
           <input id="chat-input" type="text" placeholder="Type a message..." disabled />
           <button type="submit" disabled>Send</button>
@@ -74,7 +86,12 @@ class ChatWidget {
     this.continueBanner = document.getElementById("chat-continue-banner");
     this.lastActiveEl = document.getElementById("chat-last-active");
     this.headerMeta = document.getElementById("chat-header-meta");
+    this.uploadZone = document.getElementById("chat-upload-zone");
+    this.fileInput = document.getElementById("chat-file-input");
+    this.attachBtn = document.getElementById("chat-attach-btn");
+    this.filePreviews = document.getElementById("chat-file-previews");
 
+    this.bindUploadHandlers();
     this.launcher.addEventListener("click", () => this.open());
     document.getElementById("chat-close").addEventListener("click", () => this.close());
     document.getElementById("chat-continue-btn").addEventListener("click", () => {
@@ -95,6 +112,145 @@ class ChatWidget {
       e.preventDefault();
       this.sendMessage();
     });
+  }
+
+  setSession(session) {
+    this.session = session;
+    if (session) {
+      this.uploadManager = new FileUploadManager(session);
+    }
+  }
+
+  bindUploadHandlers() {
+    this.attachBtn.addEventListener("click", () => this.fileInput.click());
+    this.fileInput.addEventListener("change", (e) => {
+      this.handleFiles(e.target.files);
+      e.target.value = "";
+    });
+    this.uploadZone.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      this.uploadZone.classList.add("dragover");
+    });
+    this.uploadZone.addEventListener("dragleave", () => {
+      this.uploadZone.classList.remove("dragover");
+    });
+    this.uploadZone.addEventListener("drop", (e) => {
+      e.preventDefault();
+      this.uploadZone.classList.remove("dragover");
+      this.handleFiles(e.dataTransfer.files);
+    });
+    this.uploadZone.addEventListener("click", () => this.fileInput.click());
+  }
+
+  async handleFiles(fileList) {
+    if (!this.uploadManager || !fileList?.length) return;
+    const limits = await this.uploadManager.getLimits();
+    for (const file of fileList) {
+      if (this.pendingFiles.length >= limits.max_files_per_message) {
+        this.setStatus(`Maximum ${limits.max_files_per_message} files per message`);
+        break;
+      }
+      const error = this.uploadManager.validateFile(
+        file,
+        limits,
+        this.pendingFiles.length,
+      );
+      if (error) {
+        this.setStatus(error);
+        continue;
+      }
+      const item = this.uploadManager.createPreview(file);
+      this.pendingFiles.push(item);
+      this.renderFilePreviews();
+      this.uploadPendingFile(item);
+    }
+  }
+
+  async uploadPendingFile(item) {
+    try {
+      const uploaded = await this.uploadManager.uploadFile(item.file, (pct) => {
+        item.progress = pct;
+        this.updateFilePreviewProgress(item);
+      });
+      item.uploaded = uploaded;
+      item.progress = 100;
+      if (!item.previewUrl && uploaded.preview_url) {
+        item.previewUrl = uploaded.preview_url.startsWith("http")
+          ? uploaded.preview_url
+          : `${window.location.origin}${uploaded.preview_url}`;
+      }
+      this.renderFilePreviews();
+    } catch (err) {
+      item.error = err.message;
+      this.setStatus(err.message);
+      this.renderFilePreviews();
+    }
+  }
+
+  removePendingFile(id) {
+    const idx = this.pendingFiles.findIndex((f) => f.id === id);
+    if (idx === -1) return;
+    this.uploadManager.revokePreview(this.pendingFiles[idx]);
+    this.pendingFiles.splice(idx, 1);
+    this.renderFilePreviews();
+  }
+
+  renderFilePreviews() {
+    this.filePreviews.innerHTML = "";
+    for (const item of this.pendingFiles) {
+      const el = document.createElement("div");
+      el.className = "chat-file-preview";
+      const icon = item.file.type.startsWith("image/")
+        ? `<img src="${item.previewUrl}" alt="${this.escapeHtml(item.file.name)}" />`
+        : `<div class="file-icon">${item.file.type === "application/pdf" ? "PDF" : "TXT"}</div>`;
+      el.innerHTML = `
+        <button type="button" class="remove-file" aria-label="Remove file">×</button>
+        ${icon}
+        <span class="file-name">${this.escapeHtml(item.file.name)}</span>
+        ${item.progress < 100 && !item.error ? '<div class="progress-bar"><span></span></div>' : ""}
+      `;
+      el.querySelector(".remove-file").addEventListener("click", () => {
+        this.removePendingFile(item.id);
+      });
+      this.filePreviews.appendChild(el);
+      if (item.progress < 100) {
+        this.updateFilePreviewProgress(item, el);
+      }
+    }
+  }
+
+  updateFilePreviewProgress(item, el = null) {
+    const node =
+      el ||
+      [...this.filePreviews.querySelectorAll(".chat-file-preview")].find((n) =>
+        n.querySelector(".file-name")?.textContent === item.file.name,
+      );
+    const bar = node?.querySelector(".progress-bar span");
+    if (bar) bar.style.width = `${item.progress}%`;
+  }
+
+  getReadyAttachments() {
+    return this.pendingFiles
+      .filter((f) => f.uploaded && !f.error)
+      .map((f) => ({
+        file_id: f.uploaded.file_id,
+        url: f.uploaded.url.startsWith("http")
+          ? f.uploaded.url
+          : `${window.location.origin}${f.uploaded.url}`,
+        filename: f.uploaded.filename,
+        content_type: f.uploaded.content_type,
+        attachment_type: f.uploaded.attachment_type,
+        size_bytes: f.uploaded.size_bytes,
+        ocr_requested: ["image", "pdf"].includes(f.uploaded.attachment_type),
+      }));
+  }
+
+  clearPendingFiles() {
+    for (const item of this.pendingFiles) {
+      this.uploadManager?.revokePreview(item);
+    }
+    this.pendingFiles = [];
+    this.renderFilePreviews();
   }
 
   bindActivityTracking() {
@@ -197,13 +353,13 @@ class ChatWidget {
       );
       const messagesData = messagesRes.ok ? await messagesRes.json() : { messages: [] };
 
-      this.session = {
+      this.setSession({
         session_id: status.session_id,
         conversation_id: status.conversation_id,
         anonymous_user_id: anonymousUserId,
         expires_at: status.expires_at,
         resumed: true,
-      };
+      });
       saveSession({
         anonymousUserId,
         sessionId: status.session_id,
@@ -245,13 +401,13 @@ class ChatWidget {
       }
 
       const data = await res.json();
-      this.session = {
+      this.setSession({
         session_id: data.session_id,
         conversation_id: data.conversation_id,
         anonymous_user_id: data.anonymous_user_id,
         expires_at: data.expires_at,
         resumed: true,
-      };
+      });
 
       saveSession({
         anonymousUserId: data.anonymous_user_id,
@@ -297,7 +453,7 @@ class ChatWidget {
         throw new Error(`Session init failed (${res.status})`);
       }
 
-      this.session = await res.json();
+      this.setSession(await res.json());
       const now = new Date().toISOString();
       saveSession({
         anonymousUserId: this.session.anonymous_user_id,
@@ -324,24 +480,48 @@ class ChatWidget {
     this.messagesEl.innerHTML = "";
     for (const msg of messages) {
       const role = msg.role === "customer" ? "user" : msg.role;
-      this.appendMessage(role, msg.content, msg.timestamp);
+      this.appendMessage(role, msg.content, msg.timestamp, msg.attachments || []);
     }
   }
 
-  appendMessage(role, content, timestamp) {
+  renderAttachmentHtml(attachments, role) {
+    if (!attachments?.length) return "";
+    const items = attachments
+      .map((a) => {
+        const url = a.url?.startsWith("http") ? a.url : `${window.location.origin}${a.url}`;
+        if (a.attachment_type === "image") {
+          return `<img src="${url}" alt="${this.escapeHtml(a.filename)}" />`;
+        }
+        return `<span class="attachment-chip">${this.escapeHtml(a.filename)}</span>`;
+      })
+      .join("");
+    return `<div class="chat-message-attachments">${items}</div>`;
+  }
+
+  appendMessage(role, content, timestamp, attachments = []) {
     const el = document.createElement("article");
     el.className = `chat-message ${role}`;
     const time = timestamp ? new Date(timestamp).toLocaleTimeString() : "";
-    el.innerHTML = `<p>${this.escapeHtml(content)}</p>${time ? `<time>${time}</time>` : ""}`;
+    const body = content ? `<p>${this.escapeHtml(content)}</p>` : "";
+    el.innerHTML = `${body}${this.renderAttachmentHtml(attachments, role)}${time ? `<time>${time}</time>` : ""}`;
     this.messagesEl.appendChild(el);
     this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
   }
 
   async sendMessage() {
     const text = this.input.value.trim();
-    if (!text || !this.session) return;
+    const attachments = this.getReadyAttachments();
+    if ((!text && !attachments.length) || !this.session) return;
+    if (this.pendingFiles.some((f) => !f.uploaded && !f.error)) {
+      this.setStatus("Please wait for uploads to finish.");
+      return;
+    }
+    if (this.pendingFiles.some((f) => f.error)) {
+      this.setStatus("Remove failed uploads before sending.");
+      return;
+    }
 
-    this.appendMessage("user", text, new Date().toISOString());
+    this.appendMessage("user", text, new Date().toISOString(), attachments);
     this.input.value = "";
     this.resetInactivityTimer();
 
@@ -355,6 +535,7 @@ class ChatWidget {
             anonymous_user_id: this.session.anonymous_user_id,
             session_id: this.session.session_id,
             content: text,
+            attachments,
           }),
         },
       );
@@ -362,7 +543,11 @@ class ChatWidget {
         const now = new Date().toISOString();
         saveLastConversation(this.session.conversation_id, now);
         this.setHeaderMeta(now);
+        this.clearPendingFiles();
         this.setStatus("Message received — AI replies coming in a future story.");
+      } else {
+        const err = await res.json().catch(() => ({}));
+        this.setStatus(err.detail || "Failed to send message.");
       }
     } catch (err) {
       console.error(err);
@@ -376,6 +561,8 @@ class ChatWidget {
   enableInput() {
     this.input.disabled = false;
     this.form.querySelector("button").disabled = false;
+    this.attachBtn.disabled = false;
+    this.uploadZone.classList.remove("hidden");
   }
 
   open() {

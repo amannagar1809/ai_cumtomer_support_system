@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 from app.models.conversation import ConversationChannel
 from app.schemas.chat_memory import ChatMemoryMessage
+from app.schemas.upload import MessageAttachment
 
 
 class ChatSessionMetadata(BaseModel):
@@ -63,6 +64,7 @@ class ConversationMessageResponse(BaseModel):
     role: str
     content: str
     timestamp: datetime
+    attachments: list[MessageAttachment] = Field(default_factory=list)
 
 
 class ContinueConversationResponse(BaseModel):
@@ -84,6 +86,7 @@ class SendMessageRequest(BaseModel):
     anonymous_user_id: UUID
     content: str
     session_id: UUID | None = None
+    attachments: list[MessageAttachment] = Field(default_factory=list)
 
 
 class SendMessageResponse(BaseModel):

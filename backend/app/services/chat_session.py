@@ -19,9 +19,12 @@ from app.schemas.chat import (
     ReturningUserResponse,
     SendMessageResponse,
 )
+from app.models.message import Message
 from app.schemas.chat_memory import ChatMemoryMessage, ChatMemoryRole
 from app.schemas.session import UserContext
+from app.schemas.upload import MessageAttachment
 from app.services.chat_memory import ChatMemoryService
+from app.services.langgraph_attachments import LangGraphAttachmentService
 from app.services.message_store import MessageStoreService
 from app.services.session_cache import SessionCacheService
 from app.services.user_context_cache import UserContextCacheService
@@ -107,19 +110,30 @@ class ChatSessionService:
         *,
         language: str = "en",
         timestamp: datetime | None = None,
-    ) -> ChatMemoryMessage:
+        attachments: list[MessageAttachment] | None = None,
+    ) -> tuple[Message, ChatMemoryMessage]:
         ts = timestamp or datetime.now(UTC)
-        message = ChatMemoryMessage(role=role, content=content, timestamp=ts)
-        await self._messages.persist(
+        attachment_list = attachments or []
+        display_content = MessageStoreService.format_content_with_attachments(
+            content,
+            attachment_list,
+        )
+        row = await self._messages.persist(
             db,
             conversation_id=conversation_id,
             role=role,
             content=content,
             language=language,
             timestamp=ts.replace(tzinfo=None),
+            attachments=attachment_list,
         )
-        await self._chat_memory.append_message(conversation_id, message)
-        return message
+        memory_message = ChatMemoryMessage(
+            role=role,
+            content=display_content,
+            timestamp=ts,
+        )
+        await self._chat_memory.append_message(conversation_id, memory_message)
+        return row, memory_message
 
     async def _append_greeting(
         self,
@@ -129,7 +143,7 @@ class ChatSessionService:
         *,
         language: str = "en",
     ) -> ChatGreetingMessage:
-        message = await self._persist_and_cache_message(
+        _row, message = await self._persist_and_cache_message(
             db,
             conversation_id,
             ChatMemoryRole.ai,
@@ -245,13 +259,18 @@ class ChatSessionService:
 
         await db.commit()
 
+        message_responses = await self._messages.fetch_last_message_responses(
+            db,
+            conversation_id,
+            limit=settings.chat_history_message_limit,
+        )
         return ContinueConversationResponse(
             session_id=session.session_id,
             conversation_id=conversation_id,
             anonymous_user_id=anonymous_user_id,
             expires_at=self._expires_at(session.last_activity),
             last_active_at=last_active,
-            messages=[self._to_message_response(m) for m in messages],
+            messages=message_responses,
             context_loaded=True,
         )
 
@@ -273,10 +292,14 @@ class ChatSessionService:
         if conversation is None:
             return None
 
-        messages = await self._get_recent_messages(db, conversation_id)
+        messages = await self._messages.fetch_last_message_responses(
+            db,
+            conversation_id,
+            limit=settings.chat_history_message_limit,
+        )
         return ConversationMessagesResponse(
             conversation_id=conversation_id,
-            messages=[self._to_message_response(m) for m in messages],
+            messages=messages,
         )
 
     async def send_message(
@@ -287,6 +310,7 @@ class ChatSessionService:
         content: str,
         *,
         session_id: UUID | None = None,
+        attachments: list[MessageAttachment] | None = None,
     ) -> SendMessageResponse | None:
         user = await self._get_user_by_anonymous_id(db, anonymous_user_id)
         if user is None:
@@ -300,18 +324,38 @@ class ChatSessionService:
         if conversation is None:
             return None
 
-        message = await self._persist_and_cache_message(
+        attachment_list = attachments or []
+        if not content.strip() and not attachment_list:
+            raise ValueError("Message must include text or attachments")
+        if len(attachment_list) > settings.upload_max_files_per_message:
+            raise ValueError(
+                f"Maximum {settings.upload_max_files_per_message} files per message"
+            )
+
+        row, _memory = await self._persist_and_cache_message(
             db,
             conversation_id,
             ChatMemoryRole.customer,
             content,
             language=user.language,
+            attachments=attachment_list,
         )
+        if attachment_list:
+            await LangGraphAttachmentService().submit_for_processing(
+                conversation_id=conversation_id,
+                message_id=row.id,
+                attachments=attachment_list,
+            )
         if session_id:
             await self._sessions.touch(user.id, session_id)
         await db.commit()
 
-        return SendMessageResponse(message=self._to_message_response(message))
+        return SendMessageResponse(
+            message=self._messages.message_to_response(
+                row,
+                role=ChatMemoryRole.customer.value,
+            )
+        )
 
     async def _resume_session(
         self,

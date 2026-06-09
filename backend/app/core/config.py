@@ -38,6 +38,18 @@ class Settings(BaseSettings):
     )
     chat_inactivity_trigger_seconds: int = 30
     chat_history_message_limit: int = 10
+    storage_provider: str = "local"
+    storage_bucket: str = "ai-support-uploads"
+    storage_region: str = "us-east-1"
+    aws_access_key_id: str | None = None
+    aws_secret_access_key: str | None = None
+    gcs_credentials_path: str | None = None
+    upload_local_dir: str = "./uploads"
+    upload_signing_secret: str = "dev-upload-signing-secret-change-me"
+    upload_max_file_size_bytes: int = 10 * 1024 * 1024
+    upload_max_files_per_message: int = 3
+    upload_chunk_size_bytes: int = 1024 * 1024
+    upload_signed_url_ttl_seconds: int = 3600
     openai_api_key: str | None = None
 
     @property
