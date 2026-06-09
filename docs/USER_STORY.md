@@ -52,24 +52,24 @@ See [architecture/EPIC_1.1_DATA_FLOW.md](./architecture/EPIC_1.1_DATA_FLOW.md)
 **I want** a complete PostgreSQL schema  
 **So that** I can implement the data storage layer correctly.
 
-#### Users table — done
+#### Users table ΓÇö done
 
 - [x] Fields, indexes, email/phone constraints
 
-#### Conversations table — done
+#### Conversations table ΓÇö done
 
 - [x] Fields: id, user_id, channel, status, started_at, ended_at
 - [x] Composite index on `(user_id, status)`
 - [x] FK to users with `ON DELETE CASCADE`
 
-#### Messages table — done
+#### Messages table ΓÇö done
 
 - [x] Fields: id, conversation_id, sender_type, message, language, sentiment, timestamp
 - [x] Full-text search GIN index on `message`
 - [x] Monthly RANGE partition strategy + helper functions
 - [x] 90-day archiving policy (`messages_archive` + `archive_messages_older_than`)
 
-#### Tickets table — done
+#### Tickets table ΓÇö done
 
 - [x] Fields: id, conversation_id, priority, category, status, assigned_to, created_at, resolved_at
 - [x] Indexes on priority, status, assigned_to
@@ -78,7 +78,7 @@ See [architecture/EPIC_1.1_DATA_FLOW.md](./architecture/EPIC_1.1_DATA_FLOW.md)
 #### Deliverable
 
 - [architecture/EPIC_1.2_DATABASE_SCHEMA.md](./architecture/EPIC_1.2_DATABASE_SCHEMA.md)
-- Migrations: `20260602_0001_*` … `20260602_0004_*`
+- Migrations: `20260602_0001_*` ΓÇª `20260602_0004_*`
 
 ---
 
@@ -182,3 +182,23 @@ See [architecture/EPIC_1.1_DATA_FLOW.md](./architecture/EPIC_1.1_DATA_FLOW.md)
 - API: `POST /api/v1/chat/sessions`, `GET /api/v1/chat/sessions/{session_id}`
 - Service: `backend/app/services/chat_session.py`
 - Frontend: `frontend/` (chat widget, localStorage, inactivity trigger)
+
+### User Story 2.1.2
+
+**As a** Customer  
+**I want to** continue my previous chat  
+**So that** I don't have to repeat my problem.
+
+#### Tasks
+
+- [x] Display "Continue Previous Conversation" button when returning user detected
+- [x] Fetch last 10 messages from previous conversation on demand
+- [x] Load conversation context into Redis before user types first message
+- [x] Preserve conversation ID across sessions using browser storage
+- [x] Show timestamp of last interaction ("Last active: 2 hours ago")
+
+#### Deliverable
+
+- API: `GET /api/v1/chat/returning-user`, `POST /api/v1/chat/conversations/{id}/continue`, `GET /api/v1/chat/conversations/{id}/messages`
+- Service: `backend/app/services/message_store.py`
+- Frontend: continue banner, relative time labels, `last_conversation_id` in localStorage

@@ -5,6 +5,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from app.models.conversation import ConversationChannel
+from app.schemas.chat_memory import ChatMemoryMessage
 
 
 class ChatSessionMetadata(BaseModel):
@@ -44,3 +45,46 @@ class ChatSessionStatusResponse(BaseModel):
     expires_at: datetime
     greeting: ChatGreetingMessage
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ReturningUserResponse(BaseModel):
+    is_returning_user: bool
+    conversation_id: UUID | None = None
+    last_active_at: datetime | None = None
+    message_count: int = 0
+    can_continue: bool = False
+
+
+class ContinueConversationRequest(BaseModel):
+    anonymous_user_id: UUID
+
+
+class ConversationMessageResponse(BaseModel):
+    role: str
+    content: str
+    timestamp: datetime
+
+
+class ContinueConversationResponse(BaseModel):
+    session_id: UUID
+    conversation_id: UUID
+    anonymous_user_id: UUID
+    expires_at: datetime
+    last_active_at: datetime
+    messages: list[ConversationMessageResponse]
+    context_loaded: bool = True
+
+
+class ConversationMessagesResponse(BaseModel):
+    conversation_id: UUID
+    messages: list[ConversationMessageResponse]
+
+
+class SendMessageRequest(BaseModel):
+    anonymous_user_id: UUID
+    content: str
+    session_id: UUID | None = None
+
+
+class SendMessageResponse(BaseModel):
+    message: ConversationMessageResponse

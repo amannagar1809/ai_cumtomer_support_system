@@ -37,6 +37,7 @@ class Settings(BaseSettings):
         "Hi there! Welcome to AI Customer Support. How can we help you today?"
     )
     chat_inactivity_trigger_seconds: int = 30
+    chat_history_message_limit: int = 10
     openai_api_key: str | None = None
 
     @property
