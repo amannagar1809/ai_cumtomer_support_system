@@ -223,3 +223,25 @@ See [architecture/EPIC_1.1_DATA_FLOW.md](./architecture/EPIC_1.1_DATA_FLOW.md)
 - API: `POST /api/v1/chat/uploads/init`, `PUT .../chunks/{n}`, `POST .../complete`
 - Services: `file_upload.py`, `storage/`, `langgraph_attachments.py`
 - Frontend: `file-upload.js`, drag-and-drop UI, previews
+
+
+### User Story 2.1.4
+
+**As a** Customer  
+**I want to** view my ticket status through chat  
+**So that** I can track my support requests.
+
+#### Tasks
+
+- [x] Add "My Tickets" button in chat header
+- [x] Fetch all tickets associated with user ID
+- [x] Display ticket summary: ID, status, priority, created date
+- [x] Allow ticket status check by entering ticket ID
+- [x] Show real-time status updates when ticket changes
+- [x] Add option to reopen closed tickets with reason
+
+#### Deliverable
+
+- API: `GET /api/v1/chat/tickets`, `GET /api/v1/chat/tickets/{ticket_id}`, `POST /api/v1/chat/tickets/{ticket_id}/reopen`, `GET /api/v1/chat/tickets/events/stream` (SSE)
+- Services: `ticket_service.py`, `ticket_events.py`
+- Frontend: `ticket-panel.js`, My Tickets overlay in chat widget

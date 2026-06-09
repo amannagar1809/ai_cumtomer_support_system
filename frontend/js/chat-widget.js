@@ -1,4 +1,5 @@
 import { FileUploadManager } from "./file-upload.js";
+import { TicketPanel } from "./ticket-panel.js";
 import {
   clearSession,
   getOrCreateAnonymousUserId,
@@ -23,6 +24,7 @@ class ChatWidget {
     this.proactiveShown = false;
     this.pendingFiles = [];
     this.uploadManager = null;
+    this.ticketPanel = null;
     this.render();
     this.bindActivityTracking();
     this.initSession();
@@ -56,8 +58,12 @@ class ChatWidget {
             <h2>Customer Support</h2>
             <p class="chat-header-meta hidden" id="chat-header-meta"></p>
           </div>
-          <button id="chat-close" aria-label="Close chat">×</button>
+          <div class="chat-header-actions">
+            <button type="button" class="chat-tickets-btn hidden" id="chat-tickets-btn">My Tickets</button>
+            <button id="chat-close" aria-label="Close chat">×</button>
+          </div>
         </header>
+        <div id="ticket-panel-root"></div>
         <div class="chat-messages" id="chat-messages"></div>
         <div class="chat-status" id="chat-status">Connecting...</div>
         <div class="chat-upload-zone hidden" id="chat-upload-zone">
@@ -90,8 +96,13 @@ class ChatWidget {
     this.fileInput = document.getElementById("chat-file-input");
     this.attachBtn = document.getElementById("chat-attach-btn");
     this.filePreviews = document.getElementById("chat-file-previews");
+    this.ticketsBtn = document.getElementById("chat-tickets-btn");
+    this.ticketPanelRoot = document.getElementById("ticket-panel-root");
 
     this.bindUploadHandlers();
+    this.ticketsBtn.addEventListener("click", () => {
+      this.ticketPanel?.toggle();
+    });
     this.launcher.addEventListener("click", () => this.open());
     document.getElementById("chat-close").addEventListener("click", () => this.close());
     document.getElementById("chat-continue-btn").addEventListener("click", () => {
@@ -118,6 +129,11 @@ class ChatWidget {
     this.session = session;
     if (session) {
       this.uploadManager = new FileUploadManager(session);
+      if (!this.ticketPanel) {
+        this.ticketPanel = new TicketPanel(session, this.ticketPanelRoot);
+      } else {
+        this.ticketPanel.updateSession(session);
+      }
     }
   }
 
@@ -562,6 +578,7 @@ class ChatWidget {
     this.input.disabled = false;
     this.form.querySelector("button").disabled = false;
     this.attachBtn.disabled = false;
+    this.ticketsBtn.classList.remove("hidden");
     this.uploadZone.classList.remove("hidden");
   }
 
