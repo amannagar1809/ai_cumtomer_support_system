@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Customer Support</title>
+  <link rel="stylesheet" href="/static/css/chat-widget.css" />
+</head>
+<body>
+  <main class="demo-page">
+    <header>
+      <h1>AI Customer Support</h1>
+      <p>Browse our site — the chat assistant is available anytime, no login required.</p>
+    </header>
+    <section class="demo-content">
+      <h2>How can we help?</h2>
+      <p>
+        This demo page loads an anonymous chat session on page load. Your temporary ID
+        is stored in your browser. After 30 seconds of inactivity, we will proactively
+        offer help.
+      </p>
+    </section>
+  </main>
+
+  <div id="chat-widget-root"></div>
+
+  <script type="module" src="/static/js/chat-widget.js"></script>
+</body>
+</html>

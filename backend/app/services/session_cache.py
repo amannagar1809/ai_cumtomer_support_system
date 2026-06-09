@@ -27,6 +27,7 @@ class SessionCacheService:
         user_context: UserContext,
         permissions: list[str] | None = None,
         session_id: UUID | None = None,
+        conversation_id: UUID | None = None,
     ) -> SessionData:
         sid = session_id or uuid4()
         now = datetime.now(UTC)
@@ -35,6 +36,7 @@ class SessionCacheService:
             user_context=user_context,
             last_activity=now,
             permissions=permissions or [],
+            conversation_id=conversation_id,
         )
         key = session_key(user_context.user_id, sid)
         await self._redis.set(key, session.model_dump_json(), ex=self._ttl)

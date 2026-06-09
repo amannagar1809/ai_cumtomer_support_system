@@ -32,7 +32,16 @@ class Settings(BaseSettings):
     queue_max_retry_attempts: int = 3
     queue_retry_base_seconds: int = 1
     queue_consumer_block_ms: int = 5000
+    cors_origins: str = "http://localhost:8000,http://127.0.0.1:8000"
+    chat_greeting_message: str = (
+        "Hi there! Welcome to AI Customer Support. How can we help you today?"
+    )
+    chat_inactivity_trigger_seconds: int = 30
     openai_api_key: str | None = None
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
     backup_dir: str = "./backups/postgres"
     backup_retention_days: int = 35

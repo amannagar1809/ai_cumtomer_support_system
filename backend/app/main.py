@@ -1,17 +1,24 @@
 from contextlib import asynccontextmanager
+from pathlib import Path
 from uuid import uuid4
 
 import asyncpg
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.deps import get_client_ip
+from app.api.v1.chat import router as chat_router
 from app.core.config import settings
 from app.core.exceptions import RateLimitExceeded
 from app.core.rate_limit_handlers import rate_limit_exception_handler
 from app.core.redis import close_redis, get_redis_client
 from app.services.message_queue import MessageQueueService
 from app.services.rate_limiter import RateLimiterService
+
+_FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
 
 
 @asynccontextmanager
@@ -25,10 +32,19 @@ async def lifespan(app: FastAPI):
 class IpRateLimitMiddleware(BaseHTTPMiddleware):
     """Enforce rate_limit:{ip}:requests - 1000 req/min per IP."""
 
-    SKIP_PATHS = {"/health", "/health/ready", "/docs", "/openapi.json", "/redoc"}
+    SKIP_PATHS = {
+        "/health",
+        "/health/ready",
+        "/docs",
+        "/openapi.json",
+        "/redoc",
+        "/",
+        "/static",
+    }
 
     async def dispatch(self, request: Request, call_next):
-        if request.url.path in self.SKIP_PATHS:
+        path = request.url.path
+        if path in self.SKIP_PATHS or path.startswith("/static"):
             return await call_next(request)
         limiter = RateLimiterService()
         try:
@@ -40,7 +56,18 @@ class IpRateLimitMiddleware(BaseHTTPMiddleware):
 
 app = FastAPI(title="AI Customer Support System", lifespan=lifespan)
 app.add_exception_handler(RateLimitExceeded, rate_limit_exception_handler)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origin_list,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app.add_middleware(IpRateLimitMiddleware)
+app.include_router(chat_router, prefix="/api/v1")
+
+if _FRONTEND_DIR.exists():
+    app.mount("/static", StaticFiles(directory=_FRONTEND_DIR), name="static")
 
 
 @app.middleware("http")
@@ -50,6 +77,14 @@ async def add_request_id(request: Request, call_next):
     response = await call_next(request)
     response.headers["X-Request-ID"] = request_id
     return response
+
+
+@app.get("/")
+async def serve_chat_page():
+    index = _FRONTEND_DIR / "index.html"
+    if index.exists():
+        return FileResponse(index)
+    return {"message": "AI Customer Support API", "docs": "/docs"}
 
 
 @app.get("/health")

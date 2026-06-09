@@ -18,9 +18,10 @@ class SessionData(BaseModel):
     """
     Redis session payload.
     Key pattern: session:{user_id}:{session_id}
-  """
+    """
 
     session_id: UUID
     user_context: UserContext
     last_activity: datetime
     permissions: list[str] = Field(default_factory=list)
+    conversation_id: UUID | None = None
