@@ -11,6 +11,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.deps import get_client_ip
 from app.api.v1.chat import router as chat_router
+from app.api.v1.uploads import router as uploads_router
 from app.core.config import settings
 from app.core.exceptions import RateLimitExceeded
 from app.core.rate_limit_handlers import rate_limit_exception_handler
@@ -65,6 +66,7 @@ app.add_middleware(
 )
 app.add_middleware(IpRateLimitMiddleware)
 app.include_router(chat_router, prefix="/api/v1")
+app.include_router(uploads_router, prefix="/api/v1")
 
 if _FRONTEND_DIR.exists():
     app.mount("/static", StaticFiles(directory=_FRONTEND_DIR), name="static")

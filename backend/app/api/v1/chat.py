@@ -129,13 +129,20 @@ async def send_message(
     db: AsyncSession = Depends(get_db),
 ) -> SendMessageResponse:
     service = ChatSessionService()
-    result = await service.send_message(
-        db,
-        conversation_id,
-        body.anonymous_user_id,
-        body.content,
-        session_id=body.session_id,
-    )
+    try:
+        result = await service.send_message(
+            db,
+            conversation_id,
+            body.anonymous_user_id,
+            body.content,
+            session_id=body.session_id,
+            attachments=body.attachments,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
     if result is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

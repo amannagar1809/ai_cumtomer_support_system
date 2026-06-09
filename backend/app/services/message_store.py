@@ -1,12 +1,16 @@
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.models.conversation import Conversation
 from app.models.message import Message, SenderType
+from app.schemas.chat import ConversationMessageResponse
 from app.schemas.chat_memory import ChatMemoryMessage, ChatMemoryRole
+from app.schemas.upload import MessageAttachment
 
 
 def sender_type_to_role(sender: SenderType) -> ChatMemoryRole:
@@ -26,6 +30,24 @@ def role_to_sender_type(role: ChatMemoryRole) -> SenderType:
 
 
 class MessageStoreService:
+    @staticmethod
+    def format_content_with_attachments(
+        content: str,
+        attachments: list[MessageAttachment],
+    ) -> str:
+        if not attachments:
+            return content
+        names = ", ".join(a.filename for a in attachments)
+        attachment_note = f"[Attachments: {names}]"
+        return f"{content}\n{attachment_note}".strip() if content else attachment_note
+
+    @staticmethod
+    def attachments_from_metadata(metadata: dict[str, Any] | None) -> list[MessageAttachment]:
+        if not metadata:
+            return []
+        raw = metadata.get("attachments", [])
+        return [MessageAttachment.model_validate(item) for item in raw]
+
     async def persist(
         self,
         db: AsyncSession,
@@ -35,14 +57,26 @@ class MessageStoreService:
         content: str,
         language: str = "en",
         timestamp: datetime | None = None,
+        attachments: list[MessageAttachment] | None = None,
     ) -> Message:
         ts = timestamp or datetime.now(UTC).replace(tzinfo=None)
+        attachment_list = attachments or []
+        if len(attachment_list) > settings.upload_max_files_per_message:
+            raise ValueError(
+                f"Maximum {settings.upload_max_files_per_message} files per message"
+            )
+        metadata: dict[str, Any] | None = None
+        if attachment_list:
+            metadata = {
+                "attachments": [a.model_dump(mode="json") for a in attachment_list]
+            }
         message = Message(
             conversation_id=conversation_id,
             sender_type=role_to_sender_type(role),
-            message=content,
+            message=self.format_content_with_attachments(content, attachment_list),
             language=language,
             timestamp=ts,
+            sentiment=metadata,
         )
         db.add(message)
         await db.flush()
@@ -74,6 +108,40 @@ class MessageStoreService:
             )
             for row in rows
         ]
+
+    async def fetch_last_message_responses(
+        self,
+        db: AsyncSession,
+        conversation_id: UUID,
+        *,
+        limit: int = 10,
+    ) -> list[ConversationMessageResponse]:
+        stmt = (
+            select(Message)
+            .where(Message.conversation_id == conversation_id)
+            .order_by(desc(Message.timestamp))
+            .limit(limit)
+        )
+        result = await db.execute(stmt)
+        rows = list(result.scalars().all())
+        rows.reverse()
+        return [self.message_to_response(row) for row in rows]
+
+    def message_to_response(
+        self,
+        row: Message,
+        *,
+        role: str | None = None,
+    ) -> ConversationMessageResponse:
+        attachments = self.attachments_from_metadata(row.sentiment)
+        return ConversationMessageResponse(
+            role=role or sender_type_to_role(row.sender_type).value,
+            content=row.message,
+            timestamp=row.timestamp.replace(tzinfo=UTC)
+            if row.timestamp.tzinfo is None
+            else row.timestamp,
+            attachments=attachments,
+        )
 
     async def get_last_activity(
         self,
