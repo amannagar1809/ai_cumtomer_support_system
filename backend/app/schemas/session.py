@@ -14,6 +14,16 @@ class UserContext(BaseModel):
     language: str = "en"
 
 
+class SessionMetadata(BaseModel):
+    """Request metadata captured when the chat session is created."""
+
+    user_agent: str | None = None
+    ip_address: str | None = None
+    referrer_url: str | None = None
+    authenticated_user_id: UUID | None = None
+    is_authenticated: bool = False
+
+
 class SessionData(BaseModel):
     """
     Redis session payload.
@@ -25,3 +35,4 @@ class SessionData(BaseModel):
     last_activity: datetime
     permissions: list[str] = Field(default_factory=list)
     conversation_id: UUID | None = None
+    metadata: SessionMetadata = Field(default_factory=SessionMetadata)

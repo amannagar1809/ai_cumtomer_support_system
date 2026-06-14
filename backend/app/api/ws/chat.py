@@ -21,16 +21,20 @@ async def _authorize_chat_socket(
     conversation_id: UUID,
     session_id: UUID | None,
     anonymous_user_id: UUID,
+    authenticated_user_id: UUID | None = None,
 ) -> bool:
     if session_id is None:
         return False
 
     user_id = None
     async with AsyncSessionLocal() as db:
-        result = await db.execute(
-            select(User).where(User.email == anonymous_email(anonymous_user_id)),
-        )
-        user = result.scalar_one_or_none()
+        if authenticated_user_id is not None:
+            user = await db.get(User, authenticated_user_id)
+        else:
+            result = await db.execute(
+                select(User).where(User.email == anonymous_email(anonymous_user_id)),
+            )
+            user = result.scalar_one_or_none()
         if user is None:
             return False
         user_id = user.id
@@ -72,6 +76,7 @@ async def _serve_chat_websocket(
     session_id: UUID | None,
     anonymous_user_id: UUID,
     last_sequence: int | None,
+    authenticated_user_id: UUID | None = None,
     token: str | None = None,
     authorization: str | None = None,
 ) -> None:
@@ -82,6 +87,7 @@ async def _serve_chat_websocket(
         conversation_id,
         resolved_session_id,
         anonymous_user_id,
+        authenticated_user_id,
     ):
         await websocket.close(code=4403, reason="Unauthorized")
         return
@@ -120,6 +126,7 @@ async def chat_websocket(
     conversation_id: UUID,
     anonymous_user_id: UUID,
     session_id: UUID | None = None,
+    authenticated_user_id: UUID | None = None,
     token: str | None = None,
     last_sequence: int | None = Query(default=None, ge=0),
     authorization: str | None = Header(default=None),
@@ -130,6 +137,7 @@ async def chat_websocket(
         session_id,
         anonymous_user_id,
         last_sequence,
+        authenticated_user_id,
         token,
         authorization,
     )
@@ -141,6 +149,7 @@ async def legacy_chat_websocket(
     conversation_id: UUID,
     session_id: UUID,
     anonymous_user_id: UUID,
+    authenticated_user_id: UUID | None = None,
     last_sequence: int | None = Query(default=None, ge=0),
 ) -> None:
     await _serve_chat_websocket(
@@ -149,4 +158,5 @@ async def legacy_chat_websocket(
         session_id,
         anonymous_user_id,
         last_sequence,
+        authenticated_user_id,
     )

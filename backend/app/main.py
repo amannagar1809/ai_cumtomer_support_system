@@ -1,3 +1,5 @@
+import asyncio
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from uuid import uuid4
@@ -21,17 +23,44 @@ from app.core.redis import close_redis, get_redis_client
 from app.services.chat_websocket import get_chat_connection_manager
 from app.services.message_queue import MessageQueueService
 from app.services.rate_limiter import RateLimiterService
+from app.services.session_cache import SessionCacheService
 
 _FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
+logger = logging.getLogger(__name__)
+
+
+async def _session_cleanup_loop() -> None:
+    service = SessionCacheService()
+    while True:
+        await asyncio.sleep(settings.session_cleanup_interval_seconds)
+        try:
+            deleted = await service.cleanup_expired_sessions()
+            if deleted:
+                logger.info("Cleaned up %s expired chat sessions", deleted)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Session cleanup job failed")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     queue = MessageQueueService()
     await queue.ensure_streams()
-    yield
-    await get_chat_connection_manager().close_all()
-    await close_redis()
+    cleanup_task = asyncio.create_task(
+        _session_cleanup_loop(),
+        name="session-cleanup",
+    )
+    try:
+        yield
+    finally:
+        cleanup_task.cancel()
+        try:
+            await cleanup_task
+        except asyncio.CancelledError:
+            pass
+        await get_chat_connection_manager().close_all()
+        await close_redis()
 
 
 class IpRateLimitMiddleware(BaseHTTPMiddleware):

@@ -18,6 +18,7 @@ class CreateChatSessionRequest(BaseModel):
     """Anonymous chat session init — no login required."""
 
     anonymous_user_id: UUID | None = None
+    authenticated_user_id: UUID | None = None
     session_id: UUID | None = None
     conversation_id: UUID | None = None
     channel: ConversationChannel = ConversationChannel.web
@@ -37,6 +38,7 @@ class ChatSessionResponse(BaseModel):
     expires_at: datetime
     greeting: ChatGreetingMessage
     resumed: bool = False
+    authenticated_user_id: UUID | None = None
 
 
 class ChatSessionStatusResponse(BaseModel):
@@ -46,6 +48,21 @@ class ChatSessionStatusResponse(BaseModel):
     expires_at: datetime
     greeting: ChatGreetingMessage
     metadata: dict[str, Any] = Field(default_factory=dict)
+    authenticated_user_id: UUID | None = None
+
+
+class TransferSessionRequest(BaseModel):
+    anonymous_user_id: UUID
+    authenticated_user_id: UUID
+
+
+class TransferSessionResponse(BaseModel):
+    session_id: UUID
+    conversation_id: UUID | None = None
+    anonymous_user_id: UUID
+    authenticated_user_id: UUID
+    expires_at: datetime
+    transferred: bool = True
 
 
 class ReturningUserResponse(BaseModel):
@@ -58,6 +75,7 @@ class ReturningUserResponse(BaseModel):
 
 class ContinueConversationRequest(BaseModel):
     anonymous_user_id: UUID
+    authenticated_user_id: UUID | None = None
 
 
 class ConversationMessageResponse(BaseModel):
@@ -85,6 +103,7 @@ class ConversationMessagesResponse(BaseModel):
 
 class SendMessageRequest(BaseModel):
     anonymous_user_id: UUID
+    authenticated_user_id: UUID | None = None
     content: str
     session_id: UUID | None = None
     attachments: list[MessageAttachment] = Field(default_factory=list)
@@ -96,6 +115,7 @@ class SendMessageResponse(BaseModel):
 
 class RedactMessageRequest(BaseModel):
     anonymous_user_id: UUID
+    authenticated_user_id: UUID | None = None
     reason: str = Field(min_length=1, max_length=255)
 
 
