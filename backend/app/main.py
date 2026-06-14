@@ -18,6 +18,7 @@ from app.core.config import settings
 from app.core.exceptions import RateLimitExceeded
 from app.core.rate_limit_handlers import rate_limit_exception_handler
 from app.core.redis import close_redis, get_redis_client
+from app.services.chat_websocket import get_chat_connection_manager
 from app.services.message_queue import MessageQueueService
 from app.services.rate_limiter import RateLimiterService
 
@@ -29,6 +30,7 @@ async def lifespan(app: FastAPI):
     queue = MessageQueueService()
     await queue.ensure_streams()
     yield
+    await get_chat_connection_manager().close_all()
     await close_redis()
 
 
