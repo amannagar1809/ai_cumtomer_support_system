@@ -1,7 +1,7 @@
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Header, Query, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 
 from app.core.database import AsyncSessionLocal
@@ -19,9 +19,12 @@ router = APIRouter()
 
 async def _authorize_chat_socket(
     conversation_id: UUID,
-    session_id: UUID,
+    session_id: UUID | None,
     anonymous_user_id: UUID,
 ) -> bool:
+    if session_id is None:
+        return False
+
     user_id = None
     async with AsyncSessionLocal() as db:
         result = await db.execute(
@@ -45,24 +48,51 @@ async def _authorize_chat_socket(
     return session is not None and session.conversation_id == conversation_id
 
 
-@router.websocket("/ws/v1/chat")
-async def chat_websocket(
+def _session_id_from_token(
+    session_id: UUID | None,
+    token: str | None,
+    authorization: str | None,
+) -> UUID | None:
+    raw = token
+    if raw is None and authorization:
+        scheme, _, value = authorization.partition(" ")
+        if scheme.lower() == "bearer":
+            raw = value
+    if raw is None:
+        return session_id
+    try:
+        return UUID(raw)
+    except ValueError:
+        return None
+
+
+async def _serve_chat_websocket(
     websocket: WebSocket,
     conversation_id: UUID,
-    session_id: UUID,
+    session_id: UUID | None,
     anonymous_user_id: UUID,
+    last_sequence: int | None,
+    token: str | None = None,
+    authorization: str | None = None,
 ) -> None:
     manager = get_chat_connection_manager()
+    resolved_session_id = _session_id_from_token(session_id, token, authorization)
 
     if not await _authorize_chat_socket(
         conversation_id,
-        session_id,
+        resolved_session_id,
         anonymous_user_id,
     ):
         await websocket.close(code=4403, reason="Unauthorized")
         return
 
-    await manager.connect(websocket, conversation_id)
+    connected = await manager.connect(
+        websocket,
+        conversation_id,
+        last_sequence=last_sequence,
+    )
+    if not connected:
+        return
 
     try:
         while True:
@@ -82,3 +112,41 @@ async def chat_websocket(
         )
     finally:
         await manager.disconnect(websocket, conversation_id)
+
+
+@router.websocket("/ws/chat/{conversation_id}")
+async def chat_websocket(
+    websocket: WebSocket,
+    conversation_id: UUID,
+    anonymous_user_id: UUID,
+    session_id: UUID | None = None,
+    token: str | None = None,
+    last_sequence: int | None = Query(default=None, ge=0),
+    authorization: str | None = Header(default=None),
+) -> None:
+    await _serve_chat_websocket(
+        websocket,
+        conversation_id,
+        session_id,
+        anonymous_user_id,
+        last_sequence,
+        token,
+        authorization,
+    )
+
+
+@router.websocket("/ws/v1/chat")
+async def legacy_chat_websocket(
+    websocket: WebSocket,
+    conversation_id: UUID,
+    session_id: UUID,
+    anonymous_user_id: UUID,
+    last_sequence: int | None = Query(default=None, ge=0),
+) -> None:
+    await _serve_chat_websocket(
+        websocket,
+        conversation_id,
+        session_id,
+        anonymous_user_id,
+        last_sequence,
+    )

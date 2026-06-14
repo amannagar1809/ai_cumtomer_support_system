@@ -9,6 +9,7 @@ export class ChatSocket {
     this.session = null;
     this.reconnectTimer = null;
     this.lastServerPingAt = Date.now();
+    this.lastSequence = 0;
     this.heartbeatWatchTimer = null;
     this.intentionalClose = false;
   }
@@ -44,12 +45,14 @@ export class ChatSocket {
     if (!this.session) return;
 
     const params = new URLSearchParams({
-      conversation_id: this.session.conversation_id,
-      session_id: this.session.session_id,
+      token: this.session.session_id,
       anonymous_user_id: this.session.anonymous_user_id,
     });
+    if (this.lastSequence > 0) {
+      params.set("last_sequence", String(this.lastSequence));
+    }
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const url = `${protocol}//${window.location.host}/ws/v1/chat?${params}`;
+    const url = `${protocol}//${window.location.host}/ws/chat/${this.session.conversation_id}?${params}`;
 
     this.socket = new WebSocket(url);
     this.onConnectionChange?.("connecting");
@@ -84,10 +87,14 @@ export class ChatSocket {
   }
 
   handleServerEvent(data) {
-    const event = data.event;
+    if (Number.isInteger(data.sequence) && data.sequence > this.lastSequence) {
+      this.lastSequence = data.sequence;
+    }
+
+    const event = data.event || data.payload?.event || data.type;
     if (event === "ping") {
       this.lastServerPingAt = Date.now();
-      this.send({ event: "pong" });
+      this.send({ type: "message", payload: { event: "pong" }, timestamp: new Date().toISOString() });
       return;
     }
     if (event === "connected") {
