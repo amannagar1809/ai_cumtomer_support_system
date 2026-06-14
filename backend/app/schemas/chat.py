@@ -61,6 +61,7 @@ class ContinueConversationRequest(BaseModel):
 
 
 class ConversationMessageResponse(BaseModel):
+    id: UUID | None = None
     role: str
     content: str
     timestamp: datetime
@@ -91,3 +92,15 @@ class SendMessageRequest(BaseModel):
 
 class SendMessageResponse(BaseModel):
     message: ConversationMessageResponse
+
+
+class RedactMessageRequest(BaseModel):
+    anonymous_user_id: UUID
+    reason: str = Field(min_length=1, max_length=255)
+
+
+class RedactMessageResponse(BaseModel):
+    message_id: UUID
+    conversation_id: UUID
+    redacted: bool = True
+    redacted_at: datetime
