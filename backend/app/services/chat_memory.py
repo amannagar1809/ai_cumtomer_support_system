@@ -30,12 +30,32 @@ class ChatMemoryService:
         """Add message and reset expiration (sliding window). Returns list length."""
         key = chat_memory_key(conversation_id)
         length = await self._redis.rpush(key, message.model_dump_json())
+        await self._redis.ltrim(key, -settings.chat_memory_cached_messages, -1)
         await self._redis.expire(key, self._ttl)
-        return length
+        return min(length, settings.chat_memory_cached_messages)
+
+    async def append_messages(
+        self,
+        conversation_id: UUID | str,
+        messages: list[ChatMemoryMessage],
+    ) -> int:
+        key = chat_memory_key(conversation_id)
+        if not messages:
+            await self.touch(conversation_id)
+            return 0
+        values = [message.model_dump_json() for message in messages]
+        length = await self._redis.rpush(key, *values)
+        await self._redis.ltrim(key, -settings.chat_memory_cached_messages, -1)
+        await self._redis.expire(key, self._ttl)
+        return min(length, settings.chat_memory_cached_messages)
 
     async def get_messages(self, conversation_id: UUID | str) -> ChatMemoryState:
         key = chat_memory_key(conversation_id)
-        raw_messages = await self._redis.lrange(key, 0, -1)
+        raw_messages = await self._redis.lrange(
+            key,
+            -settings.chat_memory_cached_messages,
+            -1,
+        )
         messages = [ChatMemoryMessage.model_validate_json(item) for item in raw_messages]
         return ChatMemoryState(
             conversation_id=str(conversation_id),
@@ -69,6 +89,9 @@ class ChatMemoryService:
         await self._redis.delete(key)
         if not messages:
             return
-        for message in messages:
-            await self._redis.rpush(key, message.model_dump_json())
+        values = [
+            message.model_dump_json()
+            for message in messages[-settings.chat_memory_cached_messages :]
+        ]
+        await self._redis.rpush(key, *values)
         await self._redis.expire(key, self._ttl)

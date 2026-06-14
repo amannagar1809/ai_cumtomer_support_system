@@ -2,10 +2,11 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.uuid import uuid7
 from app.models.conversation import Conversation
 from app.models.message import Message, SenderType
 from app.schemas.chat import ConversationMessageResponse
@@ -30,6 +31,8 @@ def role_to_sender_type(role: ChatMemoryRole) -> SenderType:
 
 
 class MessageStoreService:
+    REDACTED_MESSAGE = "[redacted]"
+
     @staticmethod
     def format_content_with_attachments(
         content: str,
@@ -71,6 +74,7 @@ class MessageStoreService:
                 "attachments": [a.model_dump(mode="json") for a in attachment_list]
             }
         message = Message(
+            id=uuid7(),
             conversation_id=conversation_id,
             sender_type=role_to_sender_type(role),
             message=self.format_content_with_attachments(content, attachment_list),
@@ -81,6 +85,59 @@ class MessageStoreService:
         db.add(message)
         await db.flush()
         return message
+
+    async def persist_batch(
+        self,
+        db: AsyncSession,
+        messages: list[dict[str, Any]],
+    ) -> list[Message]:
+        """Persist many messages in one INSERT statement for high-volume flows."""
+        if not messages:
+            return []
+
+        rows: list[dict[str, Any]] = []
+        for item in messages:
+            raw_attachments = item.get("attachments") or []
+            if len(raw_attachments) > settings.upload_max_files_per_message:
+                raise ValueError(
+                    f"Maximum {settings.upload_max_files_per_message} files per message"
+                )
+            attachments = [
+                attachment
+                if isinstance(attachment, MessageAttachment)
+                else MessageAttachment.model_validate(attachment)
+                for attachment in raw_attachments
+            ]
+            timestamp = item.get("timestamp") or datetime.now(UTC).replace(tzinfo=None)
+            if timestamp.tzinfo is not None:
+                timestamp = timestamp.replace(tzinfo=None)
+
+            metadata: dict[str, Any] | None = None
+            if attachments:
+                metadata = {
+                    "attachments": [
+                        attachment.model_dump(mode="json")
+                        for attachment in attachments
+                    ]
+                }
+
+            rows.append(
+                {
+                    "id": uuid7(),
+                    "conversation_id": item["conversation_id"],
+                    "sender_type": role_to_sender_type(item["role"]),
+                    "message": self.format_content_with_attachments(
+                        item.get("content", ""),
+                        attachments,
+                    ),
+                    "language": item.get("language", "en"),
+                    "timestamp": timestamp,
+                    "sentiment": metadata,
+                }
+            )
+
+        result = await db.execute(insert(Message).returning(Message), rows)
+        return list(result.scalars().all())
 
     async def fetch_last_messages(
         self,
@@ -100,6 +157,7 @@ class MessageStoreService:
         rows.reverse()
         return [
             ChatMemoryMessage(
+                id=row.id,
                 role=sender_type_to_role(row.sender_type),
                 content=row.message,
                 timestamp=row.timestamp.replace(tzinfo=UTC)
@@ -135,6 +193,7 @@ class MessageStoreService:
     ) -> ConversationMessageResponse:
         attachments = self.attachments_from_metadata(row.sentiment)
         return ConversationMessageResponse(
+            id=row.id,
             role=role or sender_type_to_role(row.sender_type).value,
             content=row.message,
             timestamp=row.timestamp.replace(tzinfo=UTC)
@@ -165,9 +224,11 @@ class MessageStoreService:
         db: AsyncSession,
         conversation_id: UUID,
     ) -> int:
-        stmt = select(Message.id).where(Message.conversation_id == conversation_id)
+        stmt = select(func.count()).select_from(Message).where(
+            Message.conversation_id == conversation_id
+        )
         result = await db.execute(stmt)
-        return len(result.all())
+        return int(result.scalar_one())
 
     async def verify_conversation_owner(
         self,
@@ -179,3 +240,31 @@ class MessageStoreService:
         if conversation is None or conversation.user_id != user_id:
             return None
         return conversation
+
+    async def redact_message(
+        self,
+        db: AsyncSession,
+        *,
+        conversation_id: UUID,
+        message_id: UUID,
+        reason: str,
+    ) -> Message | None:
+        stmt = select(Message).where(
+            Message.id == message_id,
+            Message.conversation_id == conversation_id,
+        )
+        result = await db.execute(stmt)
+        message = result.scalar_one_or_none()
+        if message is None:
+            return None
+
+        now = datetime.now(UTC).replace(tzinfo=None)
+        message.message = self.REDACTED_MESSAGE
+        message.sentiment = {
+            "redacted": True,
+            "redacted_at": now.isoformat(),
+        }
+        message.redacted_at = now
+        message.redaction_reason = reason[:255]
+        await db.flush()
+        return message

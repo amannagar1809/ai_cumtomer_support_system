@@ -12,6 +12,8 @@ from app.schemas.chat import (
     ContinueConversationResponse,
     ConversationMessagesResponse,
     CreateChatSessionRequest,
+    RedactMessageRequest,
+    RedactMessageResponse,
     ReturningUserResponse,
     SendMessageRequest,
     SendMessageResponse,
@@ -90,6 +92,37 @@ async def continue_conversation(
             detail="Conversation not found for this user",
         )
     return result
+
+
+@router.post(
+    "/conversations/{conversation_id}/messages/{message_id}/redact",
+    response_model=RedactMessageResponse,
+    summary="Redact a message for GDPR compliance",
+)
+async def redact_message(
+    conversation_id: UUID,
+    message_id: UUID,
+    body: RedactMessageRequest,
+    db: AsyncSession = Depends(get_db),
+) -> RedactMessageResponse:
+    service = ChatSessionService()
+    message = await service.redact_message(
+        db,
+        conversation_id,
+        message_id,
+        body.anonymous_user_id,
+        body.reason,
+    )
+    if message is None or message.redacted_at is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Message not found for this conversation",
+        )
+    return RedactMessageResponse(
+        message_id=message.id,
+        conversation_id=message.conversation_id,
+        redacted_at=message.redacted_at,
+    )
 
 
 @router.get(

@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     chat_ws_max_connections: int = 10000
     chat_ws_replay_buffer_size: int = 100
     chat_ws_shutdown_timeout_seconds: float = 5.0
+    chat_memory_cached_messages: int = 50
     storage_provider: str = "local"
     storage_bucket: str = "ai-support-uploads"
     storage_region: str = "us-east-1"

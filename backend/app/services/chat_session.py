@@ -52,6 +52,7 @@ class ChatSessionService:
 
     def _to_message_response(self, msg: ChatMemoryMessage) -> ConversationMessageResponse:
         return ConversationMessageResponse(
+            id=msg.id,
             role=msg.role.value,
             content=msg.content,
             timestamp=msg.timestamp,
@@ -128,6 +129,7 @@ class ChatSessionService:
             attachments=attachment_list,
         )
         memory_message = ChatMemoryMessage(
+            id=row.id,
             role=role,
             content=display_content,
             timestamp=ts,
@@ -177,7 +179,7 @@ class ChatSessionService:
         messages = await self._messages.fetch_last_messages(
             db,
             conversation_id,
-            limit=settings.chat_history_message_limit,
+            limit=settings.chat_memory_cached_messages,
         )
         await self._chat_memory.load_messages(conversation_id, messages)
         await self._user_context.preload_on_conversation_start(
@@ -377,6 +379,44 @@ class ChatSessionService:
             language=language,
         )
         return row
+
+    async def redact_message(
+        self,
+        db: AsyncSession,
+        conversation_id: UUID,
+        message_id: UUID,
+        anonymous_user_id: UUID,
+        reason: str,
+    ) -> Message | None:
+        user = await self._get_user_by_anonymous_id(db, anonymous_user_id)
+        if user is None:
+            return None
+
+        conversation = await self._messages.verify_conversation_owner(
+            db,
+            conversation_id,
+            user.id,
+        )
+        if conversation is None:
+            return None
+
+        message = await self._messages.redact_message(
+            db,
+            conversation_id=conversation_id,
+            message_id=message_id,
+            reason=reason,
+        )
+        if message is None:
+            return None
+
+        messages = await self._messages.fetch_last_messages(
+            db,
+            conversation_id,
+            limit=settings.chat_memory_cached_messages,
+        )
+        await self._chat_memory.load_messages(conversation_id, messages)
+        await db.commit()
+        return message
 
     async def _resume_session(
         self,

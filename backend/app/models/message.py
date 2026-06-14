@@ -7,6 +7,7 @@ from sqlalchemy import DateTime, Enum, ForeignKey, Index, String, Text, Uuid, fu
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.uuid import uuid7
 from app.models.base import Base
 
 if TYPE_CHECKING:
@@ -39,7 +40,7 @@ class Message(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True),
         primary_key=True,
-        default=uuid.uuid4,
+        default=uuid7,
         server_default=text("gen_random_uuid()"),
     )
     timestamp: Mapped[datetime] = mapped_column(
@@ -65,5 +66,7 @@ class Message(Base):
     message: Mapped[str] = mapped_column(Text, nullable=False)
     language: Mapped[str] = mapped_column(String(10), nullable=False, server_default="en")
     sentiment: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    redacted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    redaction_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     conversation: Mapped["Conversation"] = relationship(back_populates="messages")

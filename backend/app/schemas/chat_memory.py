@@ -1,5 +1,6 @@
 from datetime import datetime
 from enum import Enum
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
@@ -11,6 +12,7 @@ class ChatMemoryRole(str, Enum):
 
 
 class ChatMemoryMessage(BaseModel):
+    id: UUID | None = None
     role: ChatMemoryRole
     content: str
     timestamp: datetime
