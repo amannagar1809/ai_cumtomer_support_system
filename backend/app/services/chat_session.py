@@ -18,10 +18,11 @@ from app.schemas.chat import (
     CreateChatSessionRequest,
     ReturningUserResponse,
     SendMessageResponse,
+    TransferSessionResponse,
 )
 from app.models.message import Message
 from app.schemas.chat_memory import ChatMemoryMessage, ChatMemoryRole
-from app.schemas.session import UserContext
+from app.schemas.session import SessionMetadata, UserContext
 from app.schemas.upload import MessageAttachment
 from app.services.chat_memory import ChatMemoryService
 from app.services.langgraph_attachments import LangGraphAttachmentService
@@ -49,6 +50,15 @@ class ChatSessionService:
 
     def _expires_at(self, last_activity: datetime) -> datetime:
         return last_activity + timedelta(seconds=settings.redis_session_ttl_seconds)
+
+    def _to_user_context(self, user: User) -> UserContext:
+        return UserContext(
+            user_id=user.id,
+            email=user.email,
+            name=user.name,
+            customer_type=user.customer_type.value,
+            language=user.language,
+        )
 
     def _to_message_response(self, msg: ChatMemoryMessage) -> ConversationMessageResponse:
         return ConversationMessageResponse(
@@ -87,6 +97,16 @@ class ChatSessionService:
         db.add(user)
         await db.flush()
         return user
+
+    async def _get_request_user(
+        self,
+        db: AsyncSession,
+        anonymous_user_id: UUID,
+        authenticated_user_id: UUID | None = None,
+    ) -> User | None:
+        if authenticated_user_id is not None:
+            return await db.get(User, authenticated_user_id)
+        return await self._get_user_by_anonymous_id(db, anonymous_user_id)
 
     async def _get_latest_conversation(
         self,
@@ -223,8 +243,10 @@ class ChatSessionService:
         db: AsyncSession,
         conversation_id: UUID,
         anonymous_user_id: UUID,
+        authenticated_user_id: UUID | None = None,
+        session_metadata: SessionMetadata | None = None,
     ) -> ContinueConversationResponse | None:
-        user = await self._get_user_by_anonymous_id(db, anonymous_user_id)
+        user = await self._get_request_user(db, anonymous_user_id, authenticated_user_id)
         if user is None:
             return None
 
@@ -241,17 +263,12 @@ class ChatSessionService:
 
         messages = await self._hydrate_context(db, user, conversation_id)
 
-        user_context = UserContext(
-            user_id=user.id,
-            email=user.email,
-            name=user.name,
-            customer_type=user.customer_type.value,
-            language=user.language,
-        )
+        user_context = self._to_user_context(user)
         session = await self._sessions.create(
             user_context,
             permissions=["chat:read", "chat:write"],
             conversation_id=conversation_id,
+            metadata=session_metadata,
         )
         await self._sessions.touch(user.id, session.session_id)
 
@@ -281,8 +298,9 @@ class ChatSessionService:
         db: AsyncSession,
         conversation_id: UUID,
         anonymous_user_id: UUID,
+        authenticated_user_id: UUID | None = None,
     ) -> ConversationMessagesResponse | None:
-        user = await self._get_user_by_anonymous_id(db, anonymous_user_id)
+        user = await self._get_request_user(db, anonymous_user_id, authenticated_user_id)
         if user is None:
             return None
 
@@ -311,10 +329,11 @@ class ChatSessionService:
         anonymous_user_id: UUID,
         content: str,
         *,
+        authenticated_user_id: UUID | None = None,
         session_id: UUID | None = None,
         attachments: list[MessageAttachment] | None = None,
     ) -> SendMessageResponse | None:
-        user = await self._get_user_by_anonymous_id(db, anonymous_user_id)
+        user = await self._get_request_user(db, anonymous_user_id, authenticated_user_id)
         if user is None:
             return None
 
@@ -387,8 +406,9 @@ class ChatSessionService:
         message_id: UUID,
         anonymous_user_id: UUID,
         reason: str,
+        authenticated_user_id: UUID | None = None,
     ) -> Message | None:
-        user = await self._get_user_by_anonymous_id(db, anonymous_user_id)
+        user = await self._get_request_user(db, anonymous_user_id, authenticated_user_id)
         if user is None:
             return None
 
@@ -462,12 +482,14 @@ class ChatSessionService:
             expires_at=self._expires_at(session.last_activity),
             greeting=greeting,
             resumed=True,
+            authenticated_user_id=session.metadata.authenticated_user_id,
         )
 
     async def start_session(
         self,
         db: AsyncSession,
         request: CreateChatSessionRequest,
+        session_metadata: SessionMetadata | None = None,
     ) -> ChatSessionResponse:
         anonymous_user_id = request.anonymous_user_id or uuid4()
         language = request.metadata.locale
@@ -486,7 +508,15 @@ class ChatSessionService:
             if resumed:
                 return resumed
 
-        user = await self._get_or_create_guest_user(db, anonymous_user_id, language)
+        authenticated_user: User | None = None
+        if request.authenticated_user_id is not None:
+            authenticated_user = await db.get(User, request.authenticated_user_id)
+
+        user = authenticated_user or await self._get_or_create_guest_user(
+            db,
+            anonymous_user_id,
+            language,
+        )
 
         conversation = Conversation(
             user_id=user.id,
@@ -496,17 +526,17 @@ class ChatSessionService:
         db.add(conversation)
         await db.flush()
 
-        user_context = UserContext(
-            user_id=user.id,
-            email=user.email,
-            name=user.name,
-            customer_type=user.customer_type.value,
-            language=user.language,
-        )
+        metadata = session_metadata or SessionMetadata()
+        if authenticated_user is not None:
+            metadata.authenticated_user_id = authenticated_user.id
+            metadata.is_authenticated = True
+
+        user_context = self._to_user_context(user)
         session = await self._sessions.create(
             user_context,
             permissions=["chat:read", "chat:write"],
             conversation_id=conversation.id,
+            metadata=metadata,
         )
         await self._user_context.preload_on_conversation_start(
             user.id,
@@ -531,6 +561,7 @@ class ChatSessionService:
             expires_at=self._expires_at(session.last_activity),
             greeting=greeting,
             resumed=False,
+            authenticated_user_id=session.metadata.authenticated_user_id,
         )
 
     async def get_session_status(
@@ -538,8 +569,9 @@ class ChatSessionService:
         db: AsyncSession,
         session_id: UUID,
         anonymous_user_id: UUID,
+        authenticated_user_id: UUID | None = None,
     ) -> ChatSessionStatusResponse | None:
-        user = await self._get_user_by_anonymous_id(db, anonymous_user_id)
+        user = await self._get_request_user(db, anonymous_user_id, authenticated_user_id)
         if user is None:
             return None
 
@@ -566,4 +598,47 @@ class ChatSessionService:
             anonymous_user_id=anonymous_user_id,
             expires_at=self._expires_at(session.last_activity),
             greeting=greeting,
+            metadata=session.metadata.model_dump(mode="json"),
+            authenticated_user_id=session.metadata.authenticated_user_id,
+        )
+
+    async def transfer_session(
+        self,
+        db: AsyncSession,
+        session_id: UUID,
+        anonymous_user_id: UUID,
+        authenticated_user_id: UUID,
+    ) -> TransferSessionResponse | None:
+        anonymous_user = await self._get_user_by_anonymous_id(db, anonymous_user_id)
+        if anonymous_user is None:
+            return None
+
+        authenticated_user = await db.get(User, authenticated_user_id)
+        if authenticated_user is None:
+            return None
+
+        session = await self._sessions.transfer(
+            from_user_id=anonymous_user.id,
+            to_user_context=self._to_user_context(authenticated_user),
+            session_id=session_id,
+        )
+        if session is None:
+            return None
+
+        if session.conversation_id is not None:
+            conversation = await self._messages.verify_conversation_owner(
+                db,
+                session.conversation_id,
+                anonymous_user.id,
+            )
+            if conversation is not None:
+                conversation.user_id = authenticated_user.id
+                await db.commit()
+
+        return TransferSessionResponse(
+            session_id=session.session_id,
+            conversation_id=session.conversation_id,
+            anonymous_user_id=anonymous_user_id,
+            authenticated_user_id=authenticated_user_id,
+            expires_at=self._expires_at(session.last_activity),
         )

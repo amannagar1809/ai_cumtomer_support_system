@@ -23,7 +23,8 @@ class Settings(BaseSettings):
     )
     redis_url: str = "redis://localhost:6379/0"
     redis_chat_memory_url: str = "redis://localhost:6379/1"
-    redis_session_ttl_seconds: int = 86400  # 24 hours
+    redis_session_ttl_seconds: int = 1800  # 30 minutes
+    session_cleanup_interval_seconds: int = 3600
     redis_chat_memory_ttl_seconds: int = 1800  # 30 minutes
     redis_user_context_ttl_seconds: int = 604800  # 7 days
     rate_limit_user_messages_per_minute: int = 10

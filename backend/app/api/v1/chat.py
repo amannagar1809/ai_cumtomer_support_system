@@ -1,10 +1,11 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db
+from app.api.deps import get_client_ip
 from app.schemas.chat import (
     ChatSessionResponse,
     ChatSessionStatusResponse,
@@ -17,10 +18,26 @@ from app.schemas.chat import (
     ReturningUserResponse,
     SendMessageRequest,
     SendMessageResponse,
+    TransferSessionRequest,
+    TransferSessionResponse,
 )
+from app.schemas.session import SessionMetadata
 from app.services.chat_session import ChatSessionService
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+
+
+def session_metadata_from_request(
+    request: Request,
+    authenticated_user_id: UUID | None = None,
+) -> SessionMetadata:
+    return SessionMetadata(
+        user_agent=request.headers.get("User-Agent"),
+        ip_address=get_client_ip(request),
+        referrer_url=request.headers.get("Referer"),
+        authenticated_user_id=authenticated_user_id,
+        is_authenticated=authenticated_user_id is not None,
+    )
 
 
 @router.post(
@@ -31,10 +48,15 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 )
 async def create_chat_session(
     body: CreateChatSessionRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> ChatSessionResponse:
     service = ChatSessionService()
-    return await service.start_session(db, body)
+    return await service.start_session(
+        db,
+        body,
+        session_metadata_from_request(request, body.authenticated_user_id),
+    )
 
 
 @router.get(
@@ -45,10 +67,16 @@ async def create_chat_session(
 async def get_chat_session(
     session_id: UUID,
     anonymous_user_id: UUID,
+    authenticated_user_id: UUID | None = None,
     db: AsyncSession = Depends(get_db),
 ) -> ChatSessionStatusResponse:
     service = ChatSessionService()
-    session = await service.get_session_status(db, session_id, anonymous_user_id)
+    session = await service.get_session_status(
+        db,
+        session_id,
+        anonymous_user_id,
+        authenticated_user_id,
+    )
     if session is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -78,6 +106,7 @@ async def get_returning_user(
 async def continue_conversation(
     conversation_id: UUID,
     body: ContinueConversationRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> ContinueConversationResponse:
     service = ChatSessionService()
@@ -85,11 +114,38 @@ async def continue_conversation(
         db,
         conversation_id,
         body.anonymous_user_id,
+        body.authenticated_user_id,
+        session_metadata_from_request(request, body.authenticated_user_id),
     )
     if result is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Conversation not found for this user",
+        )
+    return result
+
+
+@router.post(
+    "/sessions/{session_id}/transfer",
+    response_model=TransferSessionResponse,
+    summary="Transfer an anonymous chat session to an authenticated user",
+)
+async def transfer_session(
+    session_id: UUID,
+    body: TransferSessionRequest,
+    db: AsyncSession = Depends(get_db),
+) -> TransferSessionResponse:
+    service = ChatSessionService()
+    result = await service.transfer_session(
+        db,
+        session_id,
+        body.anonymous_user_id,
+        body.authenticated_user_id,
+    )
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Session or authenticated user not found",
         )
     return result
 
@@ -112,6 +168,7 @@ async def redact_message(
         message_id,
         body.anonymous_user_id,
         body.reason,
+        body.authenticated_user_id,
     )
     if message is None or message.redacted_at is None:
         raise HTTPException(
@@ -133,6 +190,7 @@ async def redact_message(
 async def get_conversation_messages(
     conversation_id: UUID,
     anonymous_user_id: UUID,
+    authenticated_user_id: UUID | None = None,
     limit: int = Query(default=10, ge=1, le=50),
     db: AsyncSession = Depends(get_db),
 ) -> ConversationMessagesResponse:
@@ -142,6 +200,7 @@ async def get_conversation_messages(
         db,
         conversation_id,
         anonymous_user_id,
+        authenticated_user_id,
     )
     if result is None:
         raise HTTPException(
@@ -168,6 +227,7 @@ async def send_message(
             conversation_id,
             body.anonymous_user_id,
             body.content,
+            authenticated_user_id=body.authenticated_user_id,
             session_id=body.session_id,
             attachments=body.attachments,
         )
