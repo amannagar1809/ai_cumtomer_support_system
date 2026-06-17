@@ -69,5 +69,14 @@ class Settings(BaseSettings):
     backup_retention_days: int = 35
     wal_archive_dir: str = "./backups/wal_archive"
 
+    # WhatsApp Business API Configuration
+    whatsapp_enabled: bool = False
+    whatsapp_phone_number_id: str | None = None
+    whatsapp_access_token: str | None = None
+    whatsapp_webhook_verify_token: str | None = None
+    whatsapp_api_version: str = "v18.0"
+    whatsapp_business_account_id: str | None = None
+    whatsapp_template_namespace: str | None = None
+
 
 settings = Settings()

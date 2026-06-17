@@ -31,12 +31,16 @@ class User(Base):
     __tablename__ = "users"
     __table_args__ = (
         CheckConstraint(
-            "email ~* '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$'",
+            "email IS NULL OR email ~* '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$'",
             name="ck_users_email_format",
         ),
         CheckConstraint(
             "phone IS NULL OR phone ~ '^\\+[1-9][0-9]{1,14}$'",
             name="ck_users_phone_e164",
+        ),
+        CheckConstraint(
+            "email IS NOT NULL OR phone IS NOT NULL",
+            name="ck_users_email_or_phone_required",
         ),
         Index("ix_users_email", "email"),
         Index("ix_users_phone", "phone"),
@@ -50,7 +54,7 @@ class User(Base):
         server_default=text("gen_random_uuid()"),
     )
     name: Mapped[str] = mapped_column(String(100), nullable=False)
-    email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
     phone: Mapped[str | None] = mapped_column(String(20), nullable=True)
     language: Mapped[str] = mapped_column(
         String(10), nullable=False, server_default="en"
