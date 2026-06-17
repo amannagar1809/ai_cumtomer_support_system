@@ -93,5 +93,15 @@ class Settings(BaseSettings):
     email_imap_use_ssl: bool = True
     email_rate_limit_per_day: int = 50
 
+    # Telegram Bot Configuration
+    telegram_enabled: bool = False
+    telegram_bot_token: str | None = None
+    telegram_webhook_url: str | None = None
+    telegram_webhook_secret: str | None = None
+    telegram_use_polling: bool = False
+    telegram_polling_interval: int = 30
+    telegram_max_message_length: int = 4096
+    telegram_max_file_size_mb: int = 50
+
 
 settings = Settings()
