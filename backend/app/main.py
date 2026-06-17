@@ -14,6 +14,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from app.api.deps import get_client_ip
 from app.api.v1.chat import router as chat_router
 from app.api.v1.email import router as email_router
+from app.api.v1.mobile_chat import router as mobile_chat_router
 from app.api.v1.tickets import router as tickets_router
 from app.api.v1.telegram import router as telegram_router
 from app.api.v1.uploads import router as uploads_router
@@ -111,6 +112,7 @@ app.include_router(tickets_router, prefix="/api/v1")
 app.include_router(whatsapp_router, prefix="/api/v1")
 app.include_router(email_router, prefix="/api/v1")
 app.include_router(telegram_router, prefix="/api/v1")
+app.include_router(mobile_chat_router, prefix="/api/v1")
 app.include_router(chat_ws_router)
 
 if _FRONTEND_DIR.exists():

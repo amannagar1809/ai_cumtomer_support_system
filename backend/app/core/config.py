@@ -103,5 +103,17 @@ class Settings(BaseSettings):
     telegram_max_message_length: int = 4096
     telegram_max_file_size_mb: int = 50
 
+    # Mobile Chat Configuration
+    mobile_chat_enabled: bool = True
+    mobile_long_polling_enabled: bool = True
+    mobile_long_polling_timeout: int = 30
+    mobile_push_notifications_enabled: bool = False
+    mobile_firebase_server_key: str | None = None
+    mobile_apns_key_id: str | None = None
+    mobile_apns_team_id: str | None = None
+    mobile_offline_queue_enabled: bool = True
+    mobile_max_offline_messages: int = 100
+    mobile_message_sync_enabled: bool = True
+
 
 settings = Settings()
