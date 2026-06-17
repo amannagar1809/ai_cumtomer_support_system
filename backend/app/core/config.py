@@ -78,5 +78,20 @@ class Settings(BaseSettings):
     whatsapp_business_account_id: str | None = None
     whatsapp_template_namespace: str | None = None
 
+    # Email Configuration
+    email_enabled: bool = False
+    email_provider: str = "postmark"  # postmark, sendgrid, custom
+    email_from_address: str = "support@example.com"
+    email_from_name: str = "AI Customer Support"
+    email_reply_to: str = "support@example.com"
+    email_postmark_api_key: str | None = None
+    email_sendgrid_api_key: str | None = None
+    email_imap_host: str | None = None
+    email_imap_port: int = 993
+    email_imap_username: str | None = None
+    email_imap_password: str | None = None
+    email_imap_use_ssl: bool = True
+    email_rate_limit_per_day: int = 50
+
 
 settings = Settings()
