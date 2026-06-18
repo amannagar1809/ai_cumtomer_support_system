@@ -4,6 +4,16 @@ import logging
 import time
 from typing import Any
 
+from app.core.redis import get_queue_redis_client
+from app.services.langgraph.message_processor import (
+    calculate_queue_priority,
+    check_duplicate_message,
+    detect_message_type,
+    extract_message_metadata,
+    generate_message_hash,
+    sanitize_message,
+    validate_message_length,
+)
 from app.services.langgraph.state import ConversationState
 
 logger = logging.getLogger(__name__)
@@ -17,7 +27,12 @@ async def receive_query_node(state: ConversationState) -> ConversationState:
     Receive Query Node: Initial node that receives and validates the user query.
 
     This node:
-    - Validates the input message
+    - Validates message length (min 1 char, max 2000 chars)
+    - Sanitizes message (removes HTML, normalizes Unicode, trims whitespace)
+    - Detects message type (text, image, file, voice)
+    - Extracts metadata (timestamp, channel, user_id)
+    - Checks for duplicate message (prevents double processing)
+    - Adds to processing queue with priority based on sentiment
     - Sets initial state
     - Records execution time
     - Creates checkpoint for resumption
@@ -33,25 +48,86 @@ async def receive_query_node(state: ConversationState) -> ConversationState:
     state.execution_path.append("receive_query")
 
     try:
-        # Validate message
-        if not state.message or not state.message.strip():
-            raise ValueError("Message cannot be empty")
+        # Step 1: Validate message length
+        is_valid, error_message = validate_message_length(state.message)
+        if not is_valid:
+            raise ValueError(error_message)
 
-        # Clean the message
-        state.message = state.message.strip()
+        # Step 2: Sanitize message
+        original_message = state.message
+        sanitized_message = sanitize_message(state.message)
+        state.message = sanitized_message
+
+        # Step 3: Detect message type
+        message_type = detect_message_type(state.message, state.metadata)
+        state.message_type = message_type
+
+        # Step 4: Extract metadata
+        extracted_metadata = extract_message_metadata(
+            timestamp=state.timestamp,
+            channel=state.channel,
+            user_id=str(state.user_id) if state.user_id else None,
+            conversation_id=str(state.conversation_id) if state.conversation_id else None,
+            additional_metadata=state.metadata,
+        )
+        state.metadata.update(extracted_metadata)
+
+        # Step 5: Check for duplicate message
+        redis_client = get_queue_redis_client()
+        message_hash = generate_message_hash(
+            message=state.message,
+            user_id=str(state.user_id) if state.user_id else None,
+            conversation_id=str(state.conversation_id) if state.conversation_id else None,
+        )
+        state.message_hash = message_hash
+
+        is_duplicate = await check_duplicate_message(message_hash, redis_client)
+        state.is_duplicate = is_duplicate
+
+        if is_duplicate:
+            logger.warning(f"Duplicate message detected and rejected: {message_hash[:16]}...")
+            raise ValueError("Duplicate message detected")
+
+        # Step 6: Calculate queue priority based on sentiment (if available)
+        # If sentiment is not yet analyzed, use default priority
+        if state.sentiment and state.sentiment_score:
+            queue_priority = calculate_queue_priority(
+                sentiment=state.sentiment,
+                sentiment_score=state.sentiment_score,
+                message_type=state.message_type,
+            )
+        else:
+            # Default priority based on message type only
+            queue_priority = calculate_queue_priority(
+                sentiment=None,
+                sentiment_score=None,
+                message_type=state.message_type,
+            )
+        state.queue_priority = queue_priority
 
         # Record intermediate result
         state.intermediate_results["receive_query"] = {
             "validated": True,
-            "message_length": len(state.message),
+            "original_length": len(original_message),
+            "sanitized_length": len(sanitized_message),
+            "message_type": message_type,
+            "message_hash": message_hash[:16] + "...",
+            "is_duplicate": is_duplicate,
+            "queue_priority": queue_priority,
             "timestamp": state.timestamp.isoformat(),
+            "metadata": extracted_metadata,
         }
 
         # Create checkpoint
         state.checkpoint_id = f"checkpoint_{state.conversation_id}_{int(time.time())}"
         state.can_resume = True
 
-        logger.info(f"Received query: {state.message[:50]}...")
+        logger.info(
+            f"Received query: {state.message[:50]}... | "
+            f"Type: {message_type} | "
+            f"Priority: {queue_priority} | "
+            f"Hash: {message_hash[:16]}..."
+        )
 
     except Exception as e:
         state.error = str(e)
