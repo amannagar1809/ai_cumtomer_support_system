@@ -15,3 +15,7 @@ alembic>=1.14.0
 # File uploads (optional cloud backends)
 boto3>=1.35.0
 google-cloud-storage>=2.18.0
+
+# Message processing
+bleach>=6.0.0
+unicodedata2>=15.0.0

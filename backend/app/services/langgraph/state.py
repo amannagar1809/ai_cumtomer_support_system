@@ -16,6 +16,12 @@ class ConversationState(BaseModel):
     user_id: Optional[UUID] = Field(default=None, description="User ID")
     channel: str = Field(default="web", description="Communication channel")
 
+    # Message type and validation
+    message_type: str = Field(default="text", description="Message type (text, image, file, voice)")
+    is_duplicate: bool = Field(default=False, description="Whether this message is a duplicate")
+    message_hash: Optional[str] = Field(default=None, description="Hash for duplicate detection")
+    queue_priority: int = Field(default=5, description="Queue priority (1-10, higher is more urgent)")
+
     # Metadata
     metadata: dict[str, Any] = Field(default_factory=dict, description="Channel-specific metadata")
     timestamp: datetime = Field(default_factory=datetime.utcnow, description="Message timestamp")
