@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.models.message import Message, SenderType
+from app.services.langgraph.context_cache import ContextCacheService
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +61,7 @@ class ConversationContext(BaseModel):
 
 
 class ContextManager:
-    """Manages conversation context, history retrieval, and summarization."""
+    """Manages conversation context, history retrieval, and summarization with caching."""
 
     def __init__(
         self,
@@ -68,6 +69,7 @@ class ContextManager:
         max_context_tokens: int = MAX_CONTEXT_TOKENS,
         summary_token_limit: int = SUMMARY_TOKEN_LIMIT,
         branch_threshold: float = CONTEXT_BRANCH_THRESHOLD,
+        enable_cache: bool = True,
     ):
         """
         Initialize the context manager.
@@ -77,11 +79,14 @@ class ContextManager:
             max_context_tokens: Maximum tokens for context window
             summary_token_limit: Token limit for summaries
             branch_threshold: Similarity threshold for detecting conversation branches
+            enable_cache: Whether to enable Redis caching
         """
         self.max_recent_messages = max_recent_messages
         self.max_context_tokens = max_context_tokens
         self.summary_token_limit = summary_token_limit
         self.branch_threshold = branch_threshold
+        self.enable_cache = enable_cache
+        self.cache_service = ContextCacheService() if enable_cache else None
 
     async def fetch_conversation_history(
         self,
@@ -353,7 +358,7 @@ class ContextManager:
         current_llm_client: Any = None,
     ) -> ConversationContext:
         """
-        Build complete conversation context for the current message.
+        Build complete conversation context for the current message with caching.
 
         Args:
             conversation_id: The conversation ID
@@ -363,6 +368,13 @@ class ContextManager:
         Returns:
             Complete conversation context
         """
+        # Check cache first (cache-aside pattern)
+        if self.enable_cache and self.cache_service:
+            cached_context = await self.cache_service.get(conversation_id, "conversation")
+            if cached_context:
+                logger.info(f"Conversation context cache hit for {conversation_id}")
+                return ConversationContext(**cached_context)
+
         # Fetch all conversation history
         all_messages = await self.fetch_conversation_history(conversation_id)
 
@@ -407,6 +419,11 @@ class ContextManager:
         # Trim to fit token limits
         context = self.trim_context_to_fit(context)
 
+        # Cache the context
+        if self.enable_cache and self.cache_service:
+            await self.cache_service.set(conversation_id, context.model_dump(), "conversation")
+            logger.debug(f"Cached conversation context for {conversation_id}")
+
         logger.info(
             f"Built context for {conversation_id}: "
             f"{len(recent_messages)} recent messages, "
@@ -415,6 +432,20 @@ class ContextManager:
         )
 
         return context
+
+    async def invalidate_conversation_cache(self, conversation_id: str) -> bool:
+        """
+        Invalidate conversation cache (called on new message).
+
+        Args:
+            conversation_id: The conversation ID
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if self.enable_cache and self.cache_service:
+            return await self.cache_service.invalidate(conversation_id, "conversation")
+        return False
 
     def format_context_for_prompt(
         self,
