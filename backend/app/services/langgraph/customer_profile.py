@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.models.ticket import Ticket, TicketStatus
 from app.models.user import User, CustomerType
+from app.services.langgraph.context_cache import ContextCacheService
 
 logger = logging.getLogger(__name__)
 
@@ -74,12 +75,13 @@ class CustomerContext(BaseModel):
 
 
 class CustomerProfileService:
-    """Service for fetching and managing customer profile data."""
+    """Service for fetching and managing customer profile data with caching."""
 
     def __init__(
         self,
         max_past_tickets: int = MAX_PAST_TICKETS,
         ticket_statuses: list[TicketStatus] = TICKET_STATUSES_TO_FETCH,
+        enable_cache: bool = True,
     ):
         """
         Initialize the customer profile service.
@@ -87,9 +89,12 @@ class CustomerProfileService:
         Args:
             max_past_tickets: Maximum number of past tickets to fetch
             ticket_statuses: Ticket statuses to fetch
+            enable_cache: Whether to enable Redis caching
         """
         self.max_past_tickets = max_past_tickets
         self.ticket_statuses = ticket_statuses
+        self.enable_cache = enable_cache
+        self.cache_service = ContextCacheService() if enable_cache else None
 
     async def fetch_customer_profile(
         self,
@@ -268,7 +273,7 @@ class CustomerProfileService:
         conversation_id: Optional[str] = None,
     ) -> CustomerContext:
         """
-        Build complete customer context combining profile, tickets, and CRM data.
+        Build complete customer context combining profile, tickets, and CRM data with caching.
 
         Args:
             user_id: The user ID
@@ -277,6 +282,13 @@ class CustomerProfileService:
         Returns:
             Complete customer context
         """
+        # Check cache first (cache-aside pattern)
+        if self.enable_cache and self.cache_service:
+            cached_context = await self.cache_service.get(user_id, "customer")
+            if cached_context:
+                logger.info(f"Customer context cache hit for {user_id}")
+                return CustomerContext(**cached_context)
+
         # Fetch customer profile
         profile = await self.fetch_customer_profile(user_id)
 
@@ -300,12 +312,31 @@ class CustomerProfileService:
             data_privacy_compliant=True,  # We only fetch necessary fields
         )
 
+        # Cache the context
+        if self.enable_cache and self.cache_service:
+            await self.cache_service.set(user_id, context.model_dump(), "customer")
+            logger.debug(f"Cached customer context for {user_id}")
+
         logger.info(
             f"Built customer context for {user_id}: "
             f"VIP={is_priority}, tickets={len(past_tickets)}, tier={profile.tier.value if profile else 'N/A'}"
         )
 
         return context
+
+    async def invalidate_customer_cache(self, user_id: str) -> bool:
+        """
+        Invalidate customer cache (called on profile update).
+
+        Args:
+            user_id: The user ID
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if self.enable_cache and self.cache_service:
+            return await self.cache_service.invalidate(user_id, "customer")
+        return False
 
     def format_context_for_personalization(
         self,
