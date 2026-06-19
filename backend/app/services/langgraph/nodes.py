@@ -5,6 +5,7 @@ import time
 from typing import Any
 
 from app.core.redis import get_queue_redis_client
+from app.services.langgraph.context_manager import ContextManager
 from app.services.langgraph.intent_classifier import IntentClassifier
 from app.services.langgraph.message_processor import (
     calculate_queue_priority,
@@ -288,6 +289,103 @@ async def intent_detection_node(state: ConversationState) -> ConversationState:
         duration = time.time() - start_time
         state.node_durations["intent_detection"] = duration
         logger.debug(f"intent_detection node completed in {duration:.2f}s")
+
+    return state
+
+
+async def context_management_node(state: ConversationState) -> ConversationState:
+    """
+    Context Management Node: Retrieves and manages conversation history.
+
+    This node:
+    - Fetches last 10 messages from current conversation
+    - Formats messages as conversation turns
+    - Summarizes older messages beyond last 10 using LLM
+    - Injects conversation summary into system prompt
+    - Handles conversation branches (unrelated questions)
+    - Implements context window management (token limits)
+
+    Args:
+        state: Current conversation state
+
+    Returns:
+        Updated state with conversation context
+    """
+    start_time = time.time()
+    state.current_node = "context_management"
+    state.execution_path.append("context_management")
+
+    try:
+        # Initialize context manager
+        context_manager = ContextManager()
+
+        # Build conversation context
+        conversation_id = str(state.conversation_id) if state.conversation_id else None
+
+        if conversation_id:
+            context = await context_manager.build_conversation_context(
+                conversation_id=conversation_id,
+                current_message=state.message,
+            )
+
+            # Update state with context information
+            state.conversation_history = [
+                {
+                    "role": turn.role.value,
+                    "content": turn.content,
+                    "timestamp": turn.timestamp.isoformat(),
+                    "metadata": turn.metadata,
+                }
+                for turn in context.recent_messages
+            ]
+
+            if context.summary:
+                state.conversation_summary = context.summary.summary
+                state.conversation_topics = context.summary.topics
+                state.conversation_entities = context.summary.entities
+
+            state.has_conversation_branch = context.has_conversation_branch
+            state.context_window_tokens = context.context_window_tokens
+            state.total_message_count = context.total_message_count
+
+            # Format context for prompt injection
+            formatted_context = context_manager.format_context_for_prompt(context)
+
+            # Record intermediate result
+            state.intermediate_results["context_management"] = {
+                "conversation_id": conversation_id,
+                "recent_message_count": len(context.recent_messages),
+                "has_summary": context.summary is not None,
+                "summary": context.summary.summary if context.summary else None,
+                "topics": context.summary.topics if context.summary else [],
+                "has_branch": context.has_conversation_branch,
+                "context_tokens": context.context_window_tokens,
+                "total_messages": context.total_message_count,
+                "formatted_context": formatted_context,
+            }
+
+            logger.info(
+                f"Context loaded: {len(context.recent_messages)} recent messages, "
+                f"{context.total_message_count - len(context.recent_messages)} summarized, "
+                f"{context.context_window_tokens} tokens"
+            )
+        else:
+            # No conversation ID, skip context loading
+            logger.warning("No conversation ID provided, skipping context management")
+            state.intermediate_results["context_management"] = {
+                "skipped": True,
+                "reason": "No conversation ID",
+            }
+
+    except Exception as e:
+        state.error = str(e)
+        state.failed_node = "context_management"
+        logger.exception(f"Error in context_management node: {e}")
+
+    finally:
+        duration = time.time() - start_time
+        state.node_durations["context_management"] = duration
+        logger.debug(f"context_management node completed in {duration:.2f}s")
 
     return state
 

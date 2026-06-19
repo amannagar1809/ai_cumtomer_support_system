@@ -46,6 +46,15 @@ class ConversationState(BaseModel):
     intent_classification_id: Optional[str] = Field(default=None, description="Unique classification ID for analytics")
     intent_model_variant: Optional[str] = Field(default=None, description="A/B test model variant used")
 
+    # Conversation context
+    conversation_history: list[dict[str, Any]] = Field(default_factory=list, description="Recent conversation history")
+    conversation_summary: Optional[str] = Field(default=None, description="Summary of older conversation messages")
+    conversation_topics: list[str] = Field(default_factory=list, description="Key topics discussed in conversation")
+    conversation_entities: dict[str, Any] = Field(default_factory=dict, description="Entities mentioned in conversation")
+    has_conversation_branch: bool = Field(default=False, description="Whether conversation branch detected")
+    context_window_tokens: int = Field(default=0, description="Estimated token count of context window")
+    total_message_count: int = Field(default=0, description="Total messages in conversation")
+
     # Knowledge search result
     search_results: list[dict[str, Any]] = Field(default_factory=list, description="Knowledge base search results")
     search_query: Optional[str] = Field(default=None, description="Query used for search")
