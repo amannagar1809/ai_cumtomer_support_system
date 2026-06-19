@@ -6,6 +6,7 @@ from typing import Any
 
 from app.core.redis import get_queue_redis_client
 from app.services.langgraph.context_manager import ContextManager
+from app.services.langgraph.customer_profile import CustomerProfileService
 from app.services.langgraph.intent_classifier import IntentClassifier
 from app.services.langgraph.message_processor import (
     calculate_queue_priority,
@@ -386,6 +387,128 @@ async def context_management_node(state: ConversationState) -> ConversationState
         duration = time.time() - start_time
         state.node_durations["context_management"] = duration
         logger.debug(f"context_management node completed in {duration:.2f}s")
+
+    return state
+
+
+async def customer_profile_node(state: ConversationState) -> ConversationState:
+    """
+    Customer Profile Node: Fetches customer profile and past tickets for personalization.
+
+    This node:
+    - Queries PostgreSQL for customer profile (name, tier, join date)
+    - Fetches past tickets (last 5, statuses: resolved, closed)
+    - Queries CRM for additional data (purchases, support history)
+    - Combines all data into customer context object
+    - Identifies VIP customers and flags for priority handling
+    - Respects data privacy: only fetches necessary fields
+
+    Args:
+        state: Current conversation state
+
+    Returns:
+        Updated state with customer context
+    """
+    start_time = time.time()
+    state.current_node = "customer_profile"
+    state.execution_path.append("customer_profile")
+
+    try:
+        # Initialize customer profile service
+        profile_service = CustomerProfileService()
+
+        # Build customer context
+        user_id = str(state.user_id) if state.user_id else None
+        conversation_id = str(state.conversation_id) if state.conversation_id else None
+
+        if user_id:
+            context = await profile_service.build_customer_context(
+                user_id=user_id,
+                conversation_id=conversation_id,
+            )
+
+            # Update state with customer profile information
+            if context.profile:
+                state.customer_profile = {
+                    "customer_id": context.profile.customer_id,
+                    "name": context.profile.name,
+                    "tier": context.profile.tier.value,
+                    "join_date": context.profile.join_date.isoformat(),
+                    "language": context.profile.language,
+                }
+                state.customer_tier = context.profile.tier.value
+                state.customer_is_vip = context.profile.is_vip
+                state.customer_join_date = context.profile.join_date.isoformat()
+                state.customer_language = context.profile.language
+
+            # Update state with past tickets
+            state.past_tickets = [
+                {
+                    "ticket_id": ticket.ticket_id,
+                    "category": ticket.category,
+                    "status": ticket.status,
+                    "priority": ticket.priority,
+                    "created_at": ticket.created_at.isoformat(),
+                    "resolved_at": ticket.resolved_at.isoformat() if ticket.resolved_at else None,
+                }
+                for ticket in context.past_tickets
+            ]
+
+            # Update state with CRM data
+            if context.crm_data:
+                state.crm_data = {
+                    "purchases": context.crm_data.purchases,
+                    "support_history": context.crm_data.support_history,
+                    "last_purchase_date": context.crm_data.last_purchase_date.isoformat() if context.crm_data.last_purchase_date else None,
+                    "total_spend": context.crm_data.total_spend,
+                    "loyalty_points": context.crm_data.loyalty_points,
+                }
+
+            # Update state with priority flag
+            state.is_priority_customer = context.is_priority_customer
+
+            # Update metadata with VIP flag for intent classifier
+            state.metadata["is_vip"] = context.is_priority_customer
+
+            # Format context for personalization
+            formatted_context = profile_service.format_context_for_personalization(context)
+
+            # Record intermediate result
+            state.intermediate_results["customer_profile"] = {
+                "customer_id": user_id,
+                "has_profile": context.profile is not None,
+                "tier": context.profile.tier.value if context.profile else None,
+                "is_vip": context.profile.is_vip if context.profile else False,
+                "past_ticket_count": len(context.past_tickets),
+                "has_crm_data": context.crm_data is not None,
+                "is_priority_customer": context.is_priority_customer,
+                "data_privacy_compliant": context.data_privacy_compliant,
+                "formatted_context": formatted_context,
+            }
+
+            logger.info(
+                f"Customer profile loaded: {context.profile.name if context.profile else 'N/A'} "
+                f"({context.profile.tier.value if context.profile else 'N/A'}), "
+                f"VIP={context.is_priority_customer}, "
+                f"tickets={len(context.past_tickets)}"
+            )
+        else:
+            # No user ID, skip profile loading
+            logger.warning("No user ID provided, skipping customer profile")
+            state.intermediate_results["customer_profile"] = {
+                "skipped": True,
+                "reason": "No user ID",
+            }
+
+    except Exception as e:
+        state.error = str(e)
+        state.failed_node = "customer_profile"
+        logger.exception(f"Error in customer_profile node: {e}")
+
+    finally:
+        duration = time.time() - start_time
+        state.node_durations["customer_profile"] = duration
+        logger.debug(f"customer_profile node completed in {duration:.2f}s")
 
     return state
 

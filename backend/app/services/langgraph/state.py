@@ -55,6 +55,16 @@ class ConversationState(BaseModel):
     context_window_tokens: int = Field(default=0, description="Estimated token count of context window")
     total_message_count: int = Field(default=0, description="Total messages in conversation")
 
+    # Customer profile context
+    customer_profile: dict[str, Any] = Field(default_factory=dict, description="Customer profile information")
+    customer_tier: Optional[str] = Field(default=None, description="Customer tier (regular/premium/vip)")
+    customer_is_vip: bool = Field(default=False, description="Whether customer is VIP")
+    customer_join_date: Optional[str] = Field(default=None, description="Customer join date")
+    customer_language: Optional[str] = Field(default=None, description="Customer preferred language")
+    past_tickets: list[dict[str, Any]] = Field(default_factory=list, description="Past tickets")
+    crm_data: dict[str, Any] = Field(default_factory=dict, description="Additional CRM data")
+    is_priority_customer: bool = Field(default=False, description="Whether customer gets priority handling")
+
     # Knowledge search result
     search_results: list[dict[str, Any]] = Field(default_factory=list, description="Knowledge base search results")
     search_query: Optional[str] = Field(default=None, description="Query used for search")
