@@ -216,7 +216,11 @@ async def intent_detection_node(state: ConversationState) -> ConversationState:
     - Applies confidence threshold (0.70 minimum)
     - Routes to appropriate node based on intent
     - Handles unknown intent for low-confidence results
-    - Extracts entities (e.g., product names, order IDs)
+    - Extracts entities (product names, error codes, amounts, dates)
+    - Classifies sub-intent for granular routing
+    - Logs classification for analytics and retraining
+    - Applies VIP intent override for priority customers
+    - Uses A/B testing framework for model variants
 
     Args:
         state: Current conversation state
@@ -229,49 +233,50 @@ async def intent_detection_node(state: ConversationState) -> ConversationState:
     state.execution_path.append("intent_detection")
 
     try:
-        # Initialize the intent classifier
-        classifier = IntentClassifier()
+        # Check if user is VIP (from metadata)
+        is_vip_user = state.metadata.get("is_vip", False)
+        user_id = str(state.user_id) if state.user_id else None
+
+        # Initialize the intent classifier with VIP and A/B testing support
+        classifier = IntentClassifier(
+            is_vip_user=is_vip_user,
+            user_id=user_id,
+        )
 
         # Classify the intent
         classification_result = classifier.classify(state.message)
 
         # Update state with classification results
-        state.detected_intent = classification_result.intent.value
+        state.detected_intent = classification_result.intent
         state.intent_confidence = classification_result.confidence
+        state.intent_sub_intent = classification_result.sub_intent
+        state.intent_entities = classification_result.entities
         state.intent_routing_node = classification_result.routing_node
         state.intent_is_confident = classification_result.is_confident
+        state.intent_classification_id = classification_result.classification_id
+        state.intent_model_variant = classification_result.model_variant
 
-        # Extract simple entities (e.g., order numbers)
-        import re
-
-        entities = {}
-        message_lower = state.message.lower()
-
-        order_match = re.search(r"order\s*#?(\d+)", message_lower)
-        if order_match:
-            entities["order_id"] = order_match.group(1)
-
-        # Extract product names (simple pattern)
-        product_match = re.search(r"product\s+(\w+)", message_lower)
-        if product_match:
-            entities["product_name"] = product_match.group(1)
-
-        state.intent_entities = entities
-
-        # Record intermediate result
+        # Record intermediate result with structured JSON output
         state.intermediate_results["intent_detection"] = {
-            "detected_intent": classification_result.intent.value,
+            "structured_output": classification_result.to_json(),
+            "detected_intent": classification_result.intent,
             "confidence": classification_result.confidence,
+            "sub_intent": classification_result.sub_intent,
+            "entities": classification_result.entities,
             "is_confident": classification_result.is_confident,
             "routing_node": classification_result.routing_node,
             "reasoning": classification_result.reasoning,
-            "entities": entities,
+            "model_variant": classification_result.model_variant,
+            "classification_id": classification_result.classification_id,
+            "is_vip_user": is_vip_user,
         }
 
         logger.info(
-            f"Detected intent: {classification_result.intent.value} "
+            f"Detected intent: {classification_result.intent} "
             f"(confidence: {classification_result.confidence:.2f}, "
-            f"routing: {classification_result.routing_node})"
+            f"sub_intent: {classification_result.sub_intent}, "
+            f"routing: {classification_result.routing_node}, "
+            f"model: {classification_result.model_variant})"
         )
 
     except Exception as e:
