@@ -5,6 +5,7 @@ import time
 from typing import Any
 
 from app.core.redis import get_queue_redis_client
+from app.services.langgraph.intent_classifier import IntentClassifier
 from app.services.langgraph.message_processor import (
     calculate_queue_priority,
     check_duplicate_message,
@@ -210,62 +211,68 @@ async def intent_detection_node(state: ConversationState) -> ConversationState:
     Intent Detection Node: Detects the user's intent from the message.
 
     This node:
-    - Classifies the user's intent (e.g., support_request, complaint, question)
+    - Classifies the user's intent using the IntentClassifier
+    - Uses few-shot prompting with training examples
+    - Applies confidence threshold (0.70 minimum)
+    - Routes to appropriate node based on intent
+    - Handles unknown intent for low-confidence results
     - Extracts entities (e.g., product names, order IDs)
-    - Returns intent classification with confidence
 
     Args:
         state: Current conversation state
 
     Returns:
-        Updated state with detected intent
+        Updated state with detected intent and routing information
     """
     start_time = time.time()
     state.current_node = "intent_detection"
     state.execution_path.append("intent_detection")
 
     try:
-        message = state.message.lower()
+        # Initialize the intent classifier
+        classifier = IntentClassifier()
 
-        # Simple intent detection (in production, use a proper NLP model)
-        intent_keywords = {
-            "support_request": ["help", "support", "assist", "problem"],
-            "complaint": ["complain", "issue", "broken", "not working", "angry"],
-            "question": ["what", "how", "why", "when", "where", "?"],
-            "greeting": ["hello", "hi", "hey", "good morning", "good evening"],
-            "farewell": ["bye", "goodbye", "see you", "thanks"],
-        }
+        # Classify the intent
+        classification_result = classifier.classify(state.message)
 
-        detected_intent = "general"
-        confidence = 0.5
-        entities = {}
-
-        for intent, keywords in intent_keywords.items():
-            if any(keyword in message for keyword in keywords):
-                detected_intent = intent
-                confidence = 0.8
-                break
+        # Update state with classification results
+        state.detected_intent = classification_result.intent.value
+        state.intent_confidence = classification_result.confidence
+        state.intent_routing_node = classification_result.routing_node
+        state.intent_is_confident = classification_result.is_confident
 
         # Extract simple entities (e.g., order numbers)
         import re
 
-        order_match = re.search(r"order\s*#?(\d+)", message)
+        entities = {}
+        message_lower = state.message.lower()
+
+        order_match = re.search(r"order\s*#?(\d+)", message_lower)
         if order_match:
             entities["order_id"] = order_match.group(1)
-            confidence += 0.1
 
-        state.detected_intent = detected_intent
-        state.intent_confidence = min(confidence, 1.0)
+        # Extract product names (simple pattern)
+        product_match = re.search(r"product\s+(\w+)", message_lower)
+        if product_match:
+            entities["product_name"] = product_match.group(1)
+
         state.intent_entities = entities
 
         # Record intermediate result
         state.intermediate_results["intent_detection"] = {
-            "detected_intent": detected_intent,
-            "confidence": state.intent_confidence,
+            "detected_intent": classification_result.intent.value,
+            "confidence": classification_result.confidence,
+            "is_confident": classification_result.is_confident,
+            "routing_node": classification_result.routing_node,
+            "reasoning": classification_result.reasoning,
             "entities": entities,
         }
 
-        logger.info(f"Detected intent: {detected_intent} (confidence: {state.intent_confidence})")
+        logger.info(
+            f"Detected intent: {classification_result.intent.value} "
+            f"(confidence: {classification_result.confidence:.2f}, "
+            f"routing: {classification_result.routing_node})"
+        )
 
     except Exception as e:
         state.error = str(e)

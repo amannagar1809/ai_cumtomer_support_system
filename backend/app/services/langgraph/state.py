@@ -40,6 +40,8 @@ class ConversationState(BaseModel):
     detected_intent: Optional[str] = Field(default=None, description="Detected intent")
     intent_confidence: Optional[float] = Field(default=None, description="Intent detection confidence")
     intent_entities: dict[str, Any] = Field(default_factory=dict, description="Extracted entities")
+    intent_routing_node: Optional[str] = Field(default=None, description="Next node to route to based on intent")
+    intent_is_confident: bool = Field(default=False, description="Whether intent confidence meets threshold")
 
     # Knowledge search result
     search_results: list[dict[str, Any]] = Field(default_factory=list, description="Knowledge base search results")
