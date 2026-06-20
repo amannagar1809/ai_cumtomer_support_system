@@ -541,9 +541,10 @@ async def sentiment_analysis_node(state: ConversationState) -> ConversationState
         # Initialize sentiment analyzer
         analyzer = SentimentAnalyzer()
 
-        # Analyze sentiment
+        # Analyze sentiment with language support
         conversation_id = str(state.conversation_id) if state.conversation_id else "unknown"
-        analysis = await analyzer.analyze(state.message, conversation_id)
+        language = state.detected_language if state.detected_language else "en"
+        analysis = await analyzer.analyze(state.message, conversation_id, language)
 
         # Update state with sentiment results
         state.sentiment = analysis.current_result.sentiment_class.value
@@ -553,6 +554,10 @@ async def sentiment_analysis_node(state: ConversationState) -> ConversationState
         state.sentiment_trend = analysis.trend.value
         state.sentiment_analysis_id = analysis.analysis_id
         state.sentiment_latency_ms = analysis.current_result.latency_ms
+        state.sentiment_language = analysis.language
+        state.sentiment_model_used = analysis.model_used
+        state.sentiment_is_fallback = analysis.is_fallback
+        state.sentiment_f1_score = analysis.f1_score
 
         # Update sentiment history
         state.sentiment_history = [
@@ -589,6 +594,10 @@ async def sentiment_analysis_node(state: ConversationState) -> ConversationState
             "latency_ms": analysis.current_result.latency_ms,
             "analysis_id": analysis.analysis_id,
             "history_count": len(analysis.history),
+            "language": analysis.language,
+            "model_used": analysis.model_used,
+            "is_fallback": analysis.is_fallback,
+            "f1_score": analysis.f1_score,
         }
 
         logger.info(

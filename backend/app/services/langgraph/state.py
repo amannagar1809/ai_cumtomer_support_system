@@ -83,6 +83,10 @@ class ConversationState(BaseModel):
     sentiment_history: list[dict[str, Any]] = Field(default_factory=list, description="Sentiment history for trend analysis")
     sentiment_analysis_id: Optional[str] = Field(default=None, description="Unique sentiment analysis ID")
     sentiment_latency_ms: Optional[float] = Field(default=None, description="Sentiment analysis latency in milliseconds")
+    sentiment_language: Optional[str] = Field(default=None, description="Language used for sentiment analysis")
+    sentiment_model_used: Optional[str] = Field(default=None, description="Model used for sentiment analysis")
+    sentiment_is_fallback: bool = Field(default=False, description="Whether fallback model was used")
+    sentiment_f1_score: Optional[float] = Field(default=None, description="Model F1 score for this language")
 
     # Angry customer handling
     is_angry_customer: bool = Field(default=False, description="Whether customer is angry")
