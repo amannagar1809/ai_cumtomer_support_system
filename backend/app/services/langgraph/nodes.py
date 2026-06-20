@@ -17,6 +17,7 @@ from app.services.langgraph.message_processor import (
     sanitize_message,
     validate_message_length,
 )
+from app.services.langgraph.sentiment_analyzer import SentimentAnalyzer
 from app.services.langgraph.state import ConversationState
 
 logger = logging.getLogger(__name__)
@@ -509,6 +510,102 @@ async def customer_profile_node(state: ConversationState) -> ConversationState:
         duration = time.time() - start_time
         state.node_durations["customer_profile"] = duration
         logger.debug(f"customer_profile node completed in {duration:.2f}s")
+
+    return state
+
+
+async def sentiment_analysis_node(state: ConversationState) -> ConversationState:
+    """
+    Sentiment Analysis Node: Detects customer sentiment in real-time.
+
+    This node:
+    - Analyzes sentiment using 6 sentiment classes (Positive, Neutral, Negative, Angry, Frustrated, Urgent)
+    - Uses keyword-based analysis (placeholder for ML model training)
+    - Implements real-time analysis with max 500ms latency
+    - Outputs sentiment score (0-1) for each class
+    - Tracks sentiment trend across conversation (escalating or de-escalating)
+    - Logs sentiment for analytics dashboard
+
+    Args:
+        state: Current conversation state
+
+    Returns:
+        Updated state with sentiment analysis results
+    """
+    start_time = time.time()
+    state.current_node = "sentiment_analysis"
+    state.execution_path.append("sentiment_analysis")
+
+    try:
+        # Initialize sentiment analyzer
+        analyzer = SentimentAnalyzer()
+
+        # Analyze sentiment
+        conversation_id = str(state.conversation_id) if state.conversation_id else "unknown"
+        analysis = await analyzer.analyze(state.message, conversation_id)
+
+        # Update state with sentiment results
+        state.sentiment = analysis.current_result.sentiment_class.value
+        state.sentiment_class = analysis.current_result.sentiment_class.value
+        state.sentiment_scores = analysis.current_result.scores.model_dump()
+        state.sentiment_confidence = analysis.current_result.confidence
+        state.sentiment_trend = analysis.trend.value
+        state.sentiment_analysis_id = analysis.analysis_id
+        state.sentiment_latency_ms = analysis.current_result.latency_ms
+
+        # Update sentiment history
+        state.sentiment_history = [
+            {
+                "message_id": entry.message_id,
+                "sentiment_class": entry.sentiment_class.value,
+                "scores": entry.scores.model_dump(),
+                "timestamp": entry.timestamp.isoformat(),
+            }
+            for entry in analysis.history
+        ]
+
+        # Calculate overall sentiment score (-1 to 1)
+        # Positive: positive, neutral
+        # Negative: negative, angry, frustrated, urgent
+        positive_score = (
+            analysis.current_result.scores.positive +
+            analysis.current_result.scores.neutral
+        )
+        negative_score = (
+            analysis.current_result.scores.negative +
+            analysis.current_result.scores.angry +
+            analysis.current_result.scores.frustrated +
+            analysis.current_result.scores.urgent
+        )
+        state.sentiment_score = positive_score - negative_score
+
+        # Record intermediate result
+        state.intermediate_results["sentiment_analysis"] = {
+            "sentiment_class": analysis.current_result.sentiment_class.value,
+            "confidence": analysis.current_result.confidence,
+            "scores": analysis.current_result.scores.model_dump(),
+            "trend": analysis.trend.value,
+            "latency_ms": analysis.current_result.latency_ms,
+            "analysis_id": analysis.analysis_id,
+            "history_count": len(analysis.history),
+        }
+
+        logger.info(
+            f"Sentiment analysis: {analysis.current_result.sentiment_class.value} "
+            f"(confidence: {analysis.current_result.confidence:.2f}, "
+            f"trend: {analysis.trend.value}, "
+            f"latency: {analysis.current_result.latency_ms:.2f}ms)"
+        )
+
+    except Exception as e:
+        state.error = str(e)
+        state.failed_node = "sentiment_analysis"
+        logger.exception(f"Error in sentiment_analysis node: {e}")
+
+    finally:
+        duration = time.time() - start_time
+        state.node_durations["sentiment_analysis"] = duration
+        logger.debug(f"sentiment_analysis node completed in {duration:.2f}s")
 
     return state
 
