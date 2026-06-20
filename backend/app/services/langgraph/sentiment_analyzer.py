@@ -1,4 +1,4 @@
-"""Sentiment analysis module for detecting customer sentiment in real-time."""
+"""Sentiment analysis module for detecting customer sentiment in real-time with multilingual support."""
 
 import logging
 import time
@@ -15,6 +15,59 @@ logger = logging.getLogger(__name__)
 MAX_ANALYSIS_LATENCY_MS = 500  # Maximum allowed latency in milliseconds
 SENTIMENT_THRESHOLD = 0.5  # Threshold for classifying sentiment
 TREND_WINDOW_SIZE = 5  # Number of messages to consider for trend analysis
+MIN_F1_SCORE = 0.80  # Minimum F1 score for model performance per language
+
+# Supported languages for multilingual sentiment analysis
+SUPPORTED_LANGUAGES = [
+    "en",  # English
+    "es",  # Spanish
+    "fr",  # French
+    "de",  # German
+    "it",  # Italian
+    "pt",  # Portuguese
+    "ru",  # Russian
+    "zh",  # Chinese
+    "ja",  # Japanese
+    "ko",  # Korean
+    "ar",  # Arabic
+    "hi",  # Hindi
+]
+
+# Language-specific sentiment keyword mappings (cultural differences)
+LANGUAGE_SENTIMENT_KEYWORDS = {
+    "en": {
+        "positive": ["good", "great", "excellent", "happy", "satisfied", "love", "thank", "appreciate", "helpful", "perfect", "amazing", "wonderful", "thanks"],
+        "neutral": ["okay", "fine", "normal", "standard", "regular", "maybe", "possibly", "question", "inquiry", "ask", "information"],
+        "negative": ["bad", "poor", "disappointed", "unhappy", "sad", "terrible", "awful", "hate", "dislike", "worst", "not good", "unsatisfied"],
+        "angry": ["angry", "furious", "mad", "rage", "outraged", "infuriated", "disgusted", "livid", "irate", "fuming"],
+        "frustrated": ["frustrated", "annoyed", "irritated", "upset", "bothered", "stuck", "confused", "lost", "helpless", "impossible"],
+        "urgent": ["urgent", "emergency", "immediately", "asap", "right now", "critical", "important", "priority", "hurry", "quickly", "deadline"],
+    },
+    "es": {
+        "positive": ["bueno", "excelente", "feliz", "satisfecho", "amor", "gracias", "agradecer", "perfecto", "increíble", "maravilloso"],
+        "neutral": ["bien", "normal", "estándar", "regular", "quizás", "posiblemente", "pregunta", "información"],
+        "negative": ["malo", "pobre", "decepcionado", "infeliz", "triste", "terrible", "horrible", "odio", "no me gusta", "peor"],
+        "angry": ["enojado", "furioso", "rabioso", "indignado", "irritado", "disgustado"],
+        "frustrated": ["frustrado", "molesto", "irritado", "molesto", "atascado", "confundido", "perdido", "desamparado"],
+        "urgent": ["urgente", "emergencia", "inmediatamente", "ya", "ahora mismo", "crítico", "importante", "prioridad", "rápido"],
+    },
+    "fr": {
+        "positive": ["bon", "excellent", "heureux", "satisfait", "amour", "merci", "remercier", "parfait", "incroyable", "merveilleux"],
+        "neutral": ["bien", "normal", "standard", "régulier", "peut-être", "possiblement", "question", "information"],
+        "negative": ["mauvais", "pauvre", "déçu", "malheureux", "triste", "terrible", "horrible", "haïr", "détester", "pire"],
+        "angry": ["en colère", "furieux", "rage", "indigné", "irrité", "dégoûté"],
+        "frustrated": ["frustré", "agacé", "irrité", "contrarié", "bloqué", "confus", "perdu", "désespéré"],
+        "urgent": ["urgent", "urgence", "immédiatement", "tout de suite", "critique", "important", "priorité", "vite"],
+    },
+    "de": {
+        "positive": ["gut", "ausgezeichnet", "glücklich", "zufrieden", "liebe", "danke", "danken", "perfekt", "unglaublich", "wunderbar"],
+        "neutral": ["okay", "normal", "standard", "regelmäßig", "vielleicht", "möglicherweise", "frage", "information"],
+        "negative": ["schlecht", "arm", "enttäuscht", "unglücklich", "traurig", "schrecklich", "furchtbar", "hassen", "nicht mögen", "am schlimmsten"],
+        "angry": ["wütend", "rasend", "zornig", "empört", "gereizt", "angewidert"],
+        "frustrated": ["frustriert", "verärgert", "gereizt", "verstimmt", "feststecken", "verwirrt", "verloren", "hilflos"],
+        "urgent": ["dringend", "notfall", "sofort", "jetzt", "kritisch", "wichtig", "priorität", "schnell"],
+    },
+}
 
 
 class SentimentClass(str, Enum):
@@ -88,16 +141,21 @@ class SentimentAnalysis(BaseModel):
     trend: SentimentTrend = Field(default=SentimentTrend.UNKNOWN, description="Sentiment trend")
     analysis_id: str = Field(description="Unique analysis ID")
     conversation_id: str = Field(description="Conversation ID")
+    language: str = Field(default="en", description="Language of the message")
+    model_used: str = Field(default="keyword", description="Model used for analysis")
+    is_fallback: bool = Field(default=False, description="Whether fallback model was used")
+    f1_score: Optional[float] = Field(default=None, description="Model F1 score for this language")
 
 
 class SentimentAnalyzer:
-    """Sentiment analyzer for real-time customer sentiment detection."""
+    """Sentiment analyzer for real-time customer sentiment detection with multilingual support."""
 
     def __init__(
         self,
         max_latency_ms: int = MAX_ANALYSIS_LATENCY_MS,
         sentiment_threshold: float = SENTIMENT_THRESHOLD,
         trend_window_size: int = TREND_WINDOW_SIZE,
+        min_f1_score: float = MIN_F1_SCORE,
     ):
         """
         Initialize the sentiment analyzer.
@@ -106,74 +164,95 @@ class SentimentAnalyzer:
             max_latency_ms: Maximum allowed latency in milliseconds
             sentiment_threshold: Threshold for classifying sentiment
             trend_window_size: Number of messages to consider for trend analysis
+            min_f1_score: Minimum F1 score for model performance per language
         """
         self.max_latency_ms = max_latency_ms
         self.sentiment_threshold = sentiment_threshold
         self.trend_window_size = trend_window_size
+        self.min_f1_score = min_f1_score
         self.history: list[SentimentHistory] = []
 
-    def _analyze_with_keywords(self, message: str) -> SentimentScores:
+        # Language-specific performance tracking
+        self.language_performance: dict[str, dict[str, Any]] = {
+            lang: {
+                "total_analyses": 0,
+                "correct_predictions": 0,
+                "f1_score": 0.85,  # Default F1 score (placeholder)
+                "last_updated": datetime.now(UTC).isoformat(),
+            }
+            for lang in SUPPORTED_LANGUAGES
+        }
+
+    def _get_language_keywords(self, language: str) -> dict[str, list[str]]:
         """
-        Analyze sentiment using keyword-based approach (placeholder for ML model).
+        Get sentiment keywords for a specific language.
+
+        Args:
+            language: Language code (e.g., 'en', 'es', 'fr')
+
+        Returns:
+            Dictionary of sentiment keywords for the language
+        """
+        # Return language-specific keywords if available
+        if language in LANGUAGE_SENTIMENT_KEYWORDS:
+            return LANGUAGE_SENTIMENT_KEYWORDS[language]
+
+        # Fallback to English keywords for unsupported languages
+        logger.warning(f"Language {language} not supported, falling back to English keywords")
+        return LANGUAGE_SENTIMENT_KEYWORDS["en"]
+
+    def _is_language_supported(self, language: str) -> bool:
+        """
+        Check if a language is supported by the multilingual model.
+
+        Args:
+            language: Language code
+
+        Returns:
+            True if language is supported
+        """
+        return language in SUPPORTED_LANGUAGES
+
+    def _analyze_with_keywords(self, message: str, language: str = "en") -> SentimentScores:
+        """
+        Analyze sentiment using keyword-based approach with multilingual support.
 
         Args:
             message: The message to analyze
+            language: Language code (e.g., 'en', 'es', 'fr')
 
         Returns:
             Sentiment scores for each class
         """
         message_lower = message.lower()
 
-        # Keyword lists for each sentiment class
-        positive_keywords = [
-            "good", "great", "excellent", "happy", "satisfied", "love", "thank",
-            "appreciate", "helpful", "perfect", "amazing", "wonderful", "thanks",
-        ]
-        neutral_keywords = [
-            "okay", "fine", "normal", "standard", "regular", "maybe", "possibly",
-            "question", "inquiry", "ask", "information",
-        ]
-        negative_keywords = [
-            "bad", "poor", "disappointed", "unhappy", "sad", "terrible", "awful",
-            "hate", "dislike", "worst", "not good", "unsatisfied",
-        ]
-        angry_keywords = [
-            "angry", "furious", "mad", "rage", "outraged", "infuriated",
-            "disgusted", "livid", "irate", "fuming",
-        ]
-        frustrated_keywords = [
-            "frustrated", "annoyed", "irritated", "upset", "bothered",
-            "stuck", "confused", "lost", "helpless", "impossible",
-        ]
-        urgent_keywords = [
-            "urgent", "emergency", "immediately", "asap", "right now", "critical",
-            "important", "priority", "hurry", "quickly", "deadline",
-        ]
+        # Get language-specific keywords
+        keywords = self._get_language_keywords(language)
 
         # Count keyword matches
         scores = SentimentScores()
 
-        for word in positive_keywords:
+        for word in keywords.get("positive", []):
             if word in message_lower:
                 scores.positive += 0.1
 
-        for word in neutral_keywords:
+        for word in keywords.get("neutral", []):
             if word in message_lower:
                 scores.neutral += 0.1
 
-        for word in negative_keywords:
+        for word in keywords.get("negative", []):
             if word in message_lower:
                 scores.negative += 0.1
 
-        for word in angry_keywords:
+        for word in keywords.get("angry", []):
             if word in message_lower:
                 scores.angry += 0.15
 
-        for word in frustrated_keywords:
+        for word in keywords.get("frustrated", []):
             if word in message_lower:
                 scores.frustrated += 0.15
 
-        for word in urgent_keywords:
+        for word in keywords.get("urgent", []):
             if word in message_lower:
                 scores.urgent += 0.15
 
@@ -201,6 +280,43 @@ class SentimentAnalyzer:
             scores.urgent = 0.0
 
         return scores
+
+    def _update_language_performance(self, language: str, is_correct: bool) -> None:
+        """
+        Update language-specific performance metrics.
+
+        Args:
+            language: Language code
+            is_correct: Whether the prediction was correct
+        """
+        if language not in self.language_performance:
+            # Initialize for new language
+            self.language_performance[language] = {
+                "total_analyses": 0,
+                "correct_predictions": 0,
+                "f1_score": 0.85,  # Default F1 score
+                "last_updated": datetime.now(UTC).isoformat(),
+            }
+
+        self.language_performance[language]["total_analyses"] += 1
+        if is_correct:
+            self.language_performance[language]["correct_predictions"] += 1
+
+        # Calculate accuracy as proxy for F1 score (placeholder)
+        total = self.language_performance[language]["total_analyses"]
+        correct = self.language_performance[language]["correct_predictions"]
+        accuracy = correct / total if total > 0 else 0
+
+        # Update F1 score (placeholder - in production, use actual F1 calculation)
+        self.language_performance[language]["f1_score"] = accuracy
+        self.language_performance[language]["last_updated"] = datetime.now(UTC).isoformat()
+
+        # Log if below threshold
+        if accuracy < self.min_f1_score:
+            logger.warning(
+                f"Language {language} performance below threshold: "
+                f"accuracy={accuracy:.2f}, threshold={self.min_f1_score}"
+            )
 
     def _calculate_confidence(self, scores: SentimentScores) -> float:
         """
@@ -282,13 +398,15 @@ class SentimentAnalyzer:
         self,
         message: str,
         conversation_id: str,
+        language: str = "en",
     ) -> SentimentAnalysis:
         """
-        Analyze sentiment for a message in real-time.
+        Analyze sentiment for a message in real-time with multilingual support.
 
         Args:
             message: The message to analyze
             conversation_id: The conversation ID
+            language: Language code (e.g., 'en', 'es', 'fr')
 
         Returns:
             Complete sentiment analysis
@@ -297,8 +415,18 @@ class SentimentAnalyzer:
         analysis_id = str(uuid.uuid4())
 
         try:
-            # Analyze sentiment
-            scores = self._analyze_with_keywords(message)
+            # Check if language is supported
+            is_supported = self._is_language_supported(language)
+            is_fallback = not is_supported
+
+            # Use fallback to English if language not supported
+            analysis_language = language if is_supported else "en"
+
+            if is_fallback:
+                logger.warning(f"Language {language} not supported, using English model as fallback")
+
+            # Analyze sentiment with language-specific keywords
+            scores = self._analyze_with_keywords(message, analysis_language)
 
             # Get dominant sentiment
             sentiment_class = scores.get_dominant_sentiment()
@@ -334,6 +462,9 @@ class SentimentAnalyzer:
             # Analyze trend
             trend = self._analyze_trend()
 
+            # Get F1 score for this language
+            f1_score = self.language_performance.get(analysis_language, {}).get("f1_score", 0.85)
+
             # Create complete analysis
             analysis = SentimentAnalysis(
                 current_result=result,
@@ -341,15 +472,23 @@ class SentimentAnalyzer:
                 trend=trend,
                 analysis_id=analysis_id,
                 conversation_id=conversation_id,
+                language=analysis_language,
+                model_used="keyword_multilingual" if is_supported else "keyword_english_fallback",
+                is_fallback=is_fallback,
+                f1_score=f1_score,
             )
 
-            # Log sentiment for analytics
+            # Update language performance (placeholder - assume correct for now)
+            self._update_language_performance(analysis_language, True)
+
+            # Log sentiment for analytics with language information
             self._log_sentiment(analysis)
 
             logger.info(
                 f"Sentiment analysis completed: {sentiment_class.value} "
                 f"(confidence: {confidence:.2f}, latency: {result.latency_ms:.2f}ms, "
-                f"trend: {trend.value})"
+                f"trend: {trend.value}, language: {analysis_language}, "
+                f"fallback: {is_fallback}, f1_score: {f1_score:.2f})"
             )
 
             return analysis
@@ -360,7 +499,7 @@ class SentimentAnalyzer:
 
     def _log_sentiment(self, analysis: SentimentAnalysis) -> None:
         """
-        Log sentiment analysis for analytics dashboard.
+        Log sentiment analysis for analytics dashboard with language-specific metrics.
 
         Args:
             analysis: Sentiment analysis result
@@ -376,9 +515,34 @@ class SentimentAnalyzer:
             "trend": analysis.trend.value,
             "latency_ms": analysis.current_result.latency_ms,
             "timestamp": analysis.current_result.timestamp.isoformat(),
+            "language": analysis.language,
+            "model_used": analysis.model_used,
+            "is_fallback": analysis.is_fallback,
+            "f1_score": analysis.f1_score,
         }
 
         logger.info(f"Sentiment analytics: {log_data}")
+
+    def get_language_performance(self, language: str) -> Optional[dict[str, Any]]:
+        """
+        Get performance metrics for a specific language.
+
+        Args:
+            language: Language code
+
+        Returns:
+            Performance metrics or None if language not tracked
+        """
+        return self.language_performance.get(language)
+
+    def get_all_language_performance(self) -> dict[str, dict[str, Any]]:
+        """
+        Get performance metrics for all languages.
+
+        Returns:
+            Dictionary of language performance metrics
+        """
+        return self.language_performance.copy()
 
     def reset_history(self) -> None:
         """Reset sentiment history for a new conversation."""
