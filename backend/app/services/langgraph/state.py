@@ -76,6 +76,13 @@ class ConversationState(BaseModel):
     # Sentiment analysis result
     sentiment: Optional[str] = Field(default=None, description="Detected sentiment (positive/negative/neutral)")
     sentiment_score: Optional[float] = Field(default=None, description="Sentiment score (-1 to 1)")
+    sentiment_class: Optional[str] = Field(default=None, description="Detailed sentiment class (positive/neutral/negative/angry/frustrated/urgent)")
+    sentiment_scores: dict[str, float] = Field(default_factory=dict, description="Scores for all sentiment classes")
+    sentiment_confidence: Optional[float] = Field(default=None, description="Sentiment confidence score (0-1)")
+    sentiment_trend: Optional[str] = Field(default=None, description="Sentiment trend (escalating/de_escalating/stable)")
+    sentiment_history: list[dict[str, Any]] = Field(default_factory=list, description="Sentiment history for trend analysis")
+    sentiment_analysis_id: Optional[str] = Field(default=None, description="Unique sentiment analysis ID")
+    sentiment_latency_ms: Optional[float] = Field(default=None, description="Sentiment analysis latency in milliseconds")
 
     # Escalation decision result
     should_escalate: bool = Field(default=False, description="Whether to escalate to human")
