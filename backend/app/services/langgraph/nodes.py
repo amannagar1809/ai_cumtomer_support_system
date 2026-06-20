@@ -5,6 +5,7 @@ import time
 from typing import Any
 
 from app.core.redis import get_queue_redis_client
+from app.services.langgraph.angry_customer_handler import AngryCustomerHandler
 from app.services.langgraph.context_manager import ContextManager
 from app.services.langgraph.customer_profile import CustomerProfileService
 from app.services.langgraph.intent_classifier import IntentClassifier
@@ -606,6 +607,108 @@ async def sentiment_analysis_node(state: ConversationState) -> ConversationState
         duration = time.time() - start_time
         state.node_durations["sentiment_analysis"] = duration
         logger.debug(f"sentiment_analysis node completed in {duration:.2f}s")
+
+    return state
+
+
+async def angry_customer_handler_node(state: ConversationState) -> ConversationState:
+    """
+    Angry Customer Handler Node: Detects and handles angry customers.
+
+    This node:
+    - Checks if angry sentiment > 0.8 threshold
+    - Increases conversation priority to critical
+    - Notifies supervisor via Slack/Teams/email
+    - Adds visual flag in agent dashboard
+    - Reduces AI response time by skipping non-essential nodes
+    - Adds sentiment tag to ticket if one is created
+
+    Args:
+        state: Current conversation state
+
+    Returns:
+        Updated state with angry customer handling actions
+    """
+    start_time = time.time()
+    state.current_node = "angry_customer_handler"
+    state.execution_path.append("angry_customer_handler")
+
+    try:
+        # Initialize angry customer handler
+        handler = AngryCustomerHandler()
+
+        # Check if sentiment analysis is available
+        if not state.sentiment_scores:
+            logger.info("No sentiment scores available, skipping angry customer check")
+            state.intermediate_results["angry_customer_handler"] = {
+                "skipped": True,
+                "reason": "No sentiment scores",
+            }
+            return state
+
+        # Handle angry customer
+        conversation_id = str(state.conversation_id) if state.conversation_id else "unknown"
+        user_id = str(state.user_id) if state.user_id else "unknown"
+
+        handling_result = await handler.handle_angry_customer(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            sentiment_scores=state.sentiment_scores,
+            sentiment_class=state.sentiment_class or "neutral",
+            message=state.message,
+            current_priority=state.queue_priority,
+            current_workflow_nodes=state.execution_path,
+            notification_channels=["slack", "email"],  # Can be configured
+        )
+
+        # Update state with handling results
+        state.is_angry_customer = handling_result["is_angry"]
+        state.angry_score = handling_result["angry_score"]
+        state.angry_customer_actions = handling_result["actions_taken"]
+
+        if handling_result["is_angry"]:
+            # Update priority
+            state.queue_priority = handling_result["results"].get("priority", state.queue_priority)
+
+            # Store dashboard flag
+            state.angry_customer_flag = handling_result["results"].get("dashboard_flag", {})
+
+            # Store notifications
+            state.angry_customer_notifications = handling_result["results"].get("notifications", [])
+
+            # Store ticket tag
+            state.ticket_sentiment_tag = handling_result["results"].get("ticket_tag")
+
+            # Mark workflow as optimized
+            if "optimized_workflow" in handling_result["results"]:
+                state.workflow_optimized = True
+
+            logger.warning(
+                f"Angry customer handled: {conversation_id}, "
+                f"actions: {handling_result['actions_taken']}, "
+                f"new priority: {state.queue_priority}"
+            )
+        else:
+            logger.info(f"Customer not angry: {conversation_id}")
+
+        # Record intermediate result
+        state.intermediate_results["angry_customer_handler"] = {
+            "is_angry": handling_result["is_angry"],
+            "angry_score": handling_result["angry_score"],
+            "actions_taken": handling_result["actions_taken"],
+            "priority": state.queue_priority,
+            "workflow_optimized": state.workflow_optimized,
+        }
+
+    except Exception as e:
+        state.error = str(e)
+        state.failed_node = "angry_customer_handler"
+        logger.exception(f"Error in angry_customer_handler node: {e}")
+
+    finally:
+        duration = time.time() - start_time
+        state.node_durations["angry_customer_handler"] = duration
+        logger.debug(f"angry_customer_handler node completed in {duration:.2f}s")
 
     return state
 

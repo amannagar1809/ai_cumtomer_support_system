@@ -84,6 +84,15 @@ class ConversationState(BaseModel):
     sentiment_analysis_id: Optional[str] = Field(default=None, description="Unique sentiment analysis ID")
     sentiment_latency_ms: Optional[float] = Field(default=None, description="Sentiment analysis latency in milliseconds")
 
+    # Angry customer handling
+    is_angry_customer: bool = Field(default=False, description="Whether customer is angry")
+    angry_score: float = Field(default=0.0, description="Angry sentiment score")
+    angry_customer_flag: dict[str, Any] = Field(default_factory=dict, description="Dashboard flag details")
+    angry_customer_actions: list[str] = Field(default_factory=list, description="Actions taken for angry customer")
+    angry_customer_notifications: list[dict[str, Any]] = Field(default_factory=list, description="Supervisor notifications sent")
+    ticket_sentiment_tag: Optional[str] = Field(default=None, description="Sentiment tag for ticket creation")
+    workflow_optimized: bool = Field(default=False, description="Whether workflow was optimized for speed")
+
     # Escalation decision result
     should_escalate: bool = Field(default=False, description="Whether to escalate to human")
     escalation_reason: Optional[str] = Field(default=None, description="Reason for escalation")
