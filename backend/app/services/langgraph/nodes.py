@@ -20,6 +20,7 @@ from app.services.langgraph.message_processor import (
 )
 from app.services.langgraph.sentiment_analyzer import SentimentAnalyzer
 from app.services.langgraph.state import ConversationState
+from app.services.langgraph.ticket_detector import TicketDetector
 
 logger = logging.getLogger(__name__)
 
@@ -718,6 +719,111 @@ async def angry_customer_handler_node(state: ConversationState) -> ConversationS
         duration = time.time() - start_time
         state.node_durations["angry_customer_handler"] = duration
         logger.debug(f"angry_customer_handler node completed in {duration:.2f}s")
+
+    return state
+
+
+async def ticket_detection_node(state: ConversationState) -> ConversationState:
+    """
+    Ticket Detection Node: Detects when a ticket should be created automatically.
+
+    This node:
+    - Detects trigger conditions (low confidence, explicit request, refund, complaint, repeated issue, angry sentiment)
+    - Implements detection logic after each AI response
+    - Adds cooldown timer (5 minutes for same issue)
+    - Allows user to cancel ticket creation
+    - Logs ticket creation decision for audit
+
+    Args:
+        state: Current conversation state
+
+    Returns:
+        Updated state with ticket detection results
+    """
+    start_time = time.time()
+    state.current_node = "ticket_detection"
+    state.execution_path.append("ticket_detection")
+
+    try:
+        # Initialize ticket detector
+        detector = TicketDetector()
+
+        # Get conversation details
+        conversation_id = str(state.conversation_id) if state.conversation_id else "unknown"
+        user_id = str(state.user_id) if state.user_id else "unknown"
+
+        # Check for user cancellation
+        user_cancelled = detector.check_user_cancellation(state.message)
+
+        # Detect triggers
+        triggers = detector.detect_triggers(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            message=state.message,
+            ai_confidence=state.sentiment_confidence,
+            sentiment_class=state.sentiment_class,
+            ai_response_count=len(state.execution_path),
+        )
+
+        # Make decision
+        decision = detector.make_decision(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            triggers=triggers,
+            user_cancelled=user_cancelled,
+        )
+
+        # Log decision for audit
+        audit_log = detector.log_decision(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            decision=decision,
+            triggers=triggers,
+            user_cancelled=user_cancelled,
+            metadata={
+                "message": state.message,
+                "sentiment_class": state.sentiment_class,
+                "sentiment_confidence": state.sentiment_confidence,
+            },
+        )
+
+        # Update state with detection results
+        state.should_create_ticket = decision.value == "create"
+        state.ticket_triggers = [trigger.model_dump() for trigger in triggers]
+        state.ticket_decision = decision.value
+        state.ticket_cooldown_active = detector._is_cooldown_active(conversation_id)
+        state.ticket_user_cancelled = user_cancelled
+        state.ticket_audit_log = audit_log.model_dump()
+
+        # Set cooldown if ticket should be created
+        if state.should_create_ticket:
+            detector._set_cooldown(conversation_id)
+
+        # Record intermediate result
+        state.intermediate_results["ticket_detection"] = {
+            "decision": decision.value,
+            "triggers": [trigger.model_dump() for trigger in triggers],
+            "cooldown_active": state.ticket_cooldown_active,
+            "user_cancelled": user_cancelled,
+            "trigger_count": len(triggers),
+        }
+
+        logger.info(
+            f"Ticket detection: {decision.value}, "
+            f"triggers: {len(triggers)}, "
+            f"cooldown: {state.ticket_cooldown_active}, "
+            f"cancelled: {user_cancelled}"
+        )
+
+    except Exception as e:
+        state.error = str(e)
+        state.failed_node = "ticket_detection"
+        logger.exception(f"Error in ticket_detection node: {e}")
+
+    finally:
+        duration = time.time() - start_time
+        state.node_durations["ticket_detection"] = duration
+        logger.debug(f"ticket_detection node completed in {duration:.2f}s")
 
     return state
 
