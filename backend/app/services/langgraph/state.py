@@ -97,6 +97,14 @@ class ConversationState(BaseModel):
     ticket_sentiment_tag: Optional[str] = Field(default=None, description="Sentiment tag for ticket creation")
     workflow_optimized: bool = Field(default=False, description="Whether workflow was optimized for speed")
 
+    # Ticket detection
+    should_create_ticket: bool = Field(default=False, description="Whether to create a ticket")
+    ticket_triggers: list[dict[str, Any]] = Field(default_factory=list, description="Triggers detected for ticket creation")
+    ticket_decision: Optional[str] = Field(default=None, description="Ticket creation decision (create/cancelled/deferred/skip)")
+    ticket_cooldown_active: bool = Field(default=False, description="Whether ticket cooldown is active")
+    ticket_user_cancelled: bool = Field(default=False, description="Whether user cancelled ticket creation")
+    ticket_audit_log: dict[str, Any] = Field(default_factory=dict, description="Audit log for ticket decision")
+
     # Escalation decision result
     should_escalate: bool = Field(default=False, description="Whether to escalate to human")
     escalation_reason: Optional[str] = Field(default=None, description="Reason for escalation")
