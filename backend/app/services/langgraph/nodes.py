@@ -21,6 +21,7 @@ from app.services.langgraph.message_processor import (
 from app.services.langgraph.sentiment_analyzer import SentimentAnalyzer
 from app.services.langgraph.state import ConversationState
 from app.services.langgraph.ticket_detector import TicketDetector
+from app.services.langgraph.ticket_extractor import TicketExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -824,6 +825,111 @@ async def ticket_detection_node(state: ConversationState) -> ConversationState:
         duration = time.time() - start_time
         state.node_durations["ticket_detection"] = duration
         logger.debug(f"ticket_detection node completed in {duration:.2f}s")
+
+    return state
+
+
+async def ticket_extraction_node(state: ConversationState) -> ConversationState:
+    """
+    Ticket Extraction Node: Extracts structured ticket data from conversation.
+
+    This node:
+    - Uses LLM to extract ticket fields from conversation
+    - Defines extraction schema (issue_summary, issue_description, priority, category, affected_product, steps_to_reproduce)
+    - Validates extracted data completeness
+    - Allows human agent to edit before final creation
+    - Links ticket to original conversation ID
+
+    Args:
+        state: Current conversation state
+
+    Returns:
+        Updated state with extracted ticket data
+    """
+    start_time = time.time()
+    state.current_node = "ticket_extraction"
+    state.execution_path.append("ticket_extraction")
+
+    try:
+        # Only extract if ticket should be created
+        if not state.should_create_ticket:
+            logger.info("Ticket creation not required, skipping extraction")
+            state.intermediate_results["ticket_extraction"] = {
+                "skipped": True,
+                "reason": "Ticket creation not required",
+            }
+            return state
+
+        # Initialize ticket extractor
+        extractor = TicketExtractor()
+
+        # Get conversation history
+        conversation_id = str(state.conversation_id) if state.conversation_id else "unknown"
+
+        # Build conversation history from state
+        conversation_history = []
+        if state.conversation_history:
+            conversation_history = state.conversation_history
+        else:
+            # Create simple history from current message
+            conversation_history = [
+                {
+                    "role": "user",
+                    "content": state.message,
+                }
+            ]
+
+        # Extract ticket data
+        extraction_result = extractor.extract_ticket_data(
+            conversation_history=conversation_history,
+            conversation_id=conversation_id,
+            use_llm=True,
+        )
+
+        # Update state with extraction results
+        state.extracted_ticket_data = {
+            "issue_summary": extraction_result.ticket_data.issue_summary,
+            "issue_description": extraction_result.ticket_data.issue_description,
+            "priority": extraction_result.ticket_data.priority.value,
+            "category": extraction_result.ticket_data.category.value,
+            "affected_product": extraction_result.ticket_data.affected_product,
+            "steps_to_reproduce": extraction_result.ticket_data.steps_to_reproduce,
+            "conversation_id": extraction_result.ticket_data.conversation_id,
+        }
+        state.ticket_extraction_id = extraction_result.extraction_id
+        state.ticket_extraction_confidence = extraction_result.ticket_data.extraction_confidence
+        state.ticket_extraction_valid = extraction_result.ticket_data.is_valid
+        state.ticket_extraction_errors = extraction_result.ticket_data.validation_errors
+        state.ticket_needs_human_review = extraction_result.ticket_data.needs_human_review
+        state.ticket_human_edited = extraction_result.human_edited
+
+        # Record intermediate result
+        state.intermediate_results["ticket_extraction"] = {
+            "extraction_id": extraction_result.extraction_id,
+            "valid": extraction_result.ticket_data.is_valid,
+            "confidence": extraction_result.ticket_data.extraction_confidence,
+            "needs_review": extraction_result.ticket_data.needs_human_review,
+            "human_edited": extraction_result.human_edited,
+            "validation_errors": extraction_result.ticket_data.validation_errors,
+            "ticket_data": state.extracted_ticket_data,
+        }
+
+        logger.info(
+            f"Ticket extraction completed: {extraction_result.extraction_id}, "
+            f"valid={extraction_result.ticket_data.is_valid}, "
+            f"confidence={extraction_result.ticket_data.extraction_confidence:.2f}, "
+            f"needs_review={extraction_result.ticket_data.needs_human_review}"
+        )
+
+    except Exception as e:
+        state.error = str(e)
+        state.failed_node = "ticket_extraction"
+        logger.exception(f"Error in ticket_extraction node: {e}")
+
+    finally:
+        duration = time.time() - start_time
+        state.node_durations["ticket_extraction"] = duration
+        logger.debug(f"ticket_extraction node completed in {duration:.2f}s")
 
     return state
 

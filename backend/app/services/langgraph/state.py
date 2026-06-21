@@ -105,6 +105,15 @@ class ConversationState(BaseModel):
     ticket_user_cancelled: bool = Field(default=False, description="Whether user cancelled ticket creation")
     ticket_audit_log: dict[str, Any] = Field(default_factory=dict, description="Audit log for ticket decision")
 
+    # Ticket extraction
+    extracted_ticket_data: dict[str, Any] = Field(default_factory=dict, description="Extracted ticket data")
+    ticket_extraction_id: Optional[str] = Field(default=None, description="Unique ticket extraction ID")
+    ticket_extraction_confidence: Optional[float] = Field(default=None, description="Extraction confidence score")
+    ticket_extraction_valid: bool = Field(default=True, description="Whether extracted data is valid")
+    ticket_extraction_errors: list[str] = Field(default_factory=list, description="Validation errors")
+    ticket_needs_human_review: bool = Field(default=False, description="Whether ticket needs human review")
+    ticket_human_edited: bool = Field(default=False, description="Whether ticket was edited by human")
+
     # Escalation decision result
     should_escalate: bool = Field(default=False, description="Whether to escalate to human")
     escalation_reason: Optional[str] = Field(default=None, description="Reason for escalation")
