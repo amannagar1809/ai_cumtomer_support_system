@@ -119,6 +119,15 @@ class ConversationState(BaseModel):
     pending_ticket_status: Optional[str] = Field(default=None, description="Pending ticket status (pending/approved/rejected)")
     pending_ticket_created: bool = Field(default=False, description="Whether ticket was added to pending queue")
 
+    # Priority detection
+    detected_priority: Optional[str] = Field(default=None, description="Detected ticket priority")
+    original_priority: Optional[str] = Field(default=None, description="Priority before adjustments")
+    priority_reasons: list[str] = Field(default_factory=list, description="Reasons for priority assignment")
+    priority_score: Optional[float] = Field(default=None, description="Priority score")
+    priority_vip_adjusted: bool = Field(default=False, description="Whether priority was adjusted for VIP")
+    priority_sla_escalated: bool = Field(default=False, description="Whether priority was escalated due to SLA")
+    priority_override_applied: bool = Field(default=False, description="Whether override rule was applied")
+
     # Escalation decision result
     should_escalate: bool = Field(default=False, description="Whether to escalate to human")
     escalation_reason: Optional[str] = Field(default=None, description="Reason for escalation")
