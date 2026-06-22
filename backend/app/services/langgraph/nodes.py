@@ -18,6 +18,7 @@ from app.services.langgraph.message_processor import (
     sanitize_message,
     validate_message_length,
 )
+from app.services.langgraph.pending_tickets import PendingTicketsQueue
 from app.services.langgraph.sentiment_analyzer import SentimentAnalyzer
 from app.services.langgraph.state import ConversationState
 from app.services.langgraph.ticket_detector import TicketDetector
@@ -930,6 +931,92 @@ async def ticket_extraction_node(state: ConversationState) -> ConversationState:
         duration = time.time() - start_time
         state.node_durations["ticket_extraction"] = duration
         logger.debug(f"ticket_extraction node completed in {duration:.2f}s")
+
+    return state
+
+
+async def pending_tickets_queue_node(state: ConversationState) -> ConversationState:
+    """
+    Pending Tickets Queue Node: Adds extracted ticket data to pending queue for human review.
+
+    This node:
+    - Creates "Pending Tickets" queue in dashboard
+    - Displays AI-generated ticket summary with confidence score
+    - Allows edit of any field before submission
+    - Adds approval button (Create Ticket) and reject button (Not an Issue)
+    - Sends approved tickets to ticketing engine
+    - Logs rejection reason for AI model improvement
+
+    Args:
+        state: Current conversation state
+
+    Returns:
+        Updated state with pending ticket queue results
+    """
+    start_time = time.time()
+    state.current_node = "pending_tickets_queue"
+    state.execution_path.append("pending_tickets_queue")
+
+    try:
+        # Only add to queue if ticket should be created and extraction is valid
+        if not state.should_create_ticket or not state.ticket_extraction_valid:
+            logger.info("Ticket not required or invalid, skipping pending queue")
+            state.intermediate_results["pending_tickets_queue"] = {
+                "skipped": True,
+                "reason": "Ticket not required or invalid",
+            }
+            return state
+
+        # Initialize pending tickets queue
+        queue = PendingTicketsQueue()
+
+        # Get conversation details
+        conversation_id = str(state.conversation_id) if state.conversation_id else "unknown"
+        user_id = str(state.user_id) if state.user_id else "unknown"
+
+        # Add ticket to pending queue
+        pending_ticket = queue.add_pending_ticket(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            extracted_data=state.extracted_ticket_data,
+            extraction_id=state.ticket_extraction_id or "unknown",
+            extraction_confidence=state.ticket_extraction_confidence or 0.0,
+            metadata={
+                "sentiment_class": state.sentiment_class,
+                "sentiment_confidence": state.sentiment_confidence,
+                "triggers": state.ticket_triggers,
+            },
+        )
+
+        # Update state with pending ticket results
+        state.pending_ticket_id = pending_ticket.ticket_id
+        state.pending_ticket_status = pending_ticket.status.value
+        state.pending_ticket_created = True
+
+        # Record intermediate result
+        state.intermediate_results["pending_tickets_queue"] = {
+            "pending_ticket_id": pending_ticket.ticket_id,
+            "status": pending_ticket.status.value,
+            "extraction_confidence": pending_ticket.extraction_confidence,
+            "created_at": pending_ticket.created_at.isoformat(),
+            "needs_review": pending_ticket.extraction_confidence < 0.7,
+        }
+
+        logger.info(
+            f"Pending ticket added to queue: {pending_ticket.ticket_id}, "
+            f"status: {pending_ticket.status.value}, "
+            f"confidence: {pending_ticket.extraction_confidence:.2f}"
+        )
+
+    except Exception as e:
+        state.error = str(e)
+        state.failed_node = "pending_tickets_queue"
+        logger.exception(f"Error in pending_tickets_queue node: {e}")
+
+    finally:
+        duration = time.time() - start_time
+        state.node_durations["pending_tickets_queue"] = duration
+        logger.debug(f"pending_tickets_queue node completed in {duration:.2f}s")
 
     return state
 

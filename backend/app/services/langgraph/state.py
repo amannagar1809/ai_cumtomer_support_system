@@ -114,6 +114,11 @@ class ConversationState(BaseModel):
     ticket_needs_human_review: bool = Field(default=False, description="Whether ticket needs human review")
     ticket_human_edited: bool = Field(default=False, description="Whether ticket was edited by human")
 
+    # Pending tickets queue
+    pending_ticket_id: Optional[str] = Field(default=None, description="Pending ticket ID")
+    pending_ticket_status: Optional[str] = Field(default=None, description="Pending ticket status (pending/approved/rejected)")
+    pending_ticket_created: bool = Field(default=False, description="Whether ticket was added to pending queue")
+
     # Escalation decision result
     should_escalate: bool = Field(default=False, description="Whether to escalate to human")
     escalation_reason: Optional[str] = Field(default=None, description="Reason for escalation")
