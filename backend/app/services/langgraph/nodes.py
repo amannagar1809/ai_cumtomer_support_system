@@ -19,6 +19,7 @@ from app.services.langgraph.message_processor import (
     validate_message_length,
 )
 from app.services.langgraph.pending_tickets import PendingTicketsQueue
+from app.services.langgraph.priority_detector import PriorityDetector
 from app.services.langgraph.sentiment_analyzer import SentimentAnalyzer
 from app.services.langgraph.state import ConversationState
 from app.services.langgraph.ticket_detector import TicketDetector
@@ -1017,6 +1018,102 @@ async def pending_tickets_queue_node(state: ConversationState) -> ConversationSt
         duration = time.time() - start_time
         state.node_durations["pending_tickets_queue"] = duration
         logger.debug(f"pending_tickets_queue node completed in {duration:.2f}s")
+
+    return state
+
+
+async def priority_detection_node(state: ConversationState) -> ConversationState:
+    """
+    Priority Detection Node: Determines ticket priority based on various factors.
+
+    This node:
+    - Defines priority rules (urgent, high, medium, low)
+    - Considers customer tier (VIP gets one level higher)
+    - Auto-escalates if no agent responds within SLA
+    - Adds priority override rules for specific scenarios
+
+    Args:
+        state: Current conversation state
+
+    Returns:
+        Updated state with priority detection results
+    """
+    start_time = time.time()
+    state.current_node = "priority_detection"
+    state.execution_path.append("priority_detection")
+
+    try:
+        # Only detect priority if ticket should be created
+        if not state.should_create_ticket:
+            logger.info("Ticket not required, skipping priority detection")
+            state.intermediate_results["priority_detection"] = {
+                "skipped": True,
+                "reason": "Ticket not required",
+            }
+            return state
+
+        # Initialize priority detector
+        detector = PriorityDetector()
+
+        # Get conversation details
+        ticket_id = state.pending_ticket_id if state.pending_ticket_id else str(state.conversation_id)
+        attempts = len(state.execution_path)
+
+        # Detect priority
+        detection_result = detector.detect_priority(
+            message=state.message,
+            sentiment_class=state.sentiment_class,
+            angry_score=state.angry_score,
+            attempts=attempts,
+            customer_tier=state.customer_tier,
+            category=state.extracted_ticket_data.get("category"),
+            ticket_id=ticket_id,
+        )
+
+        # Update state with detection results
+        state.detected_priority = detection_result.priority.value
+        state.original_priority = detection_result.original_priority.value
+        state.priority_reasons = [reason.value for reason in detection_result.reasons]
+        state.priority_score = detection_result.score
+        state.priority_vip_adjusted = detection_result.vip_adjusted
+        state.priority_sla_escalated = detection_result.sla_escalated
+        state.priority_override_applied = detection_result.override_applied
+
+        # Update extracted ticket data with detected priority
+        state.extracted_ticket_data["priority"] = detection_result.priority.value
+
+        # Track ticket creation for SLA monitoring
+        if ticket_id:
+            detector.track_ticket_creation(ticket_id)
+
+        # Record intermediate result
+        state.intermediate_results["priority_detection"] = {
+            "priority": detection_result.priority.value,
+            "original_priority": detection_result.original_priority.value,
+            "reasons": [reason.value for reason in detection_result.reasons],
+            "score": detection_result.score,
+            "vip_adjusted": detection_result.vip_adjusted,
+            "sla_escalated": detection_result.sla_escalated,
+            "override_applied": detection_result.override_applied,
+            "override_reason": detection_result.override_reason,
+        }
+
+        logger.info(
+            f"Priority detection completed: {detection_result.priority.value}, "
+            f"original: {detection_result.original_priority.value}, "
+            f"vip_adjusted: {detection_result.vip_adjusted}, "
+            f"sla_escalated: {detection_result.sla_escalated}"
+        )
+
+    except Exception as e:
+        state.error = str(e)
+        state.failed_node = "priority_detection"
+        logger.exception(f"Error in priority_detection node: {e}")
+
+    finally:
+        duration = time.time() - start_time
+        state.node_durations["priority_detection"] = duration
+        logger.debug(f"priority_detection node completed in {duration:.2f}s")
 
     return state
 
