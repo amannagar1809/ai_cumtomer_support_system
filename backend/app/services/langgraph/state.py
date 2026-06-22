@@ -128,6 +128,14 @@ class ConversationState(BaseModel):
     priority_sla_escalated: bool = Field(default=False, description="Whether priority was escalated due to SLA")
     priority_override_applied: bool = Field(default=False, description="Whether override rule was applied")
 
+    # CRM integration
+    crm_contact_id: Optional[str] = Field(default=None, description="CRM contact ID")
+    crm_account_id: Optional[str] = Field(default=None, description="CRM account ID")
+    crm_data_synced: bool = Field(default=False, description="Whether CRM data was synced")
+    crm_sync_timestamp: Optional[str] = Field(default=None, description="CRM sync timestamp")
+    crm_quota_remaining: Optional[int] = Field(default=None, description="CRM API quota remaining")
+    crm_rate_limited: bool = Field(default=False, description="Whether CRM request was rate limited")
+
     # Escalation decision result
     should_escalate: bool = Field(default=False, description="Whether to escalate to human")
     escalation_reason: Optional[str] = Field(default=None, description="Reason for escalation")
