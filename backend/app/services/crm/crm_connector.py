@@ -7,6 +7,7 @@ from typing import Any, Optional
 from .crm_auth import OAuth2Client, OAuthConfig
 from .crm_client import CRMClient
 from .crm_models import CRMAccount, CRMContact, CRMPurchase, CRMSupportTicket
+from .crm_profile_fetcher import CRMProfile, CRMProfileFetcher, FieldSecurityConfig
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,7 @@ class CRMConnector:
         crm_type: str = "salesforce",
         base_url: str = "",
         oauth_config: Optional[OAuthConfig] = None,
+        field_security: Optional[FieldSecurityConfig] = None,
     ):
         """
         Initialize CRM connector.
@@ -27,6 +29,7 @@ class CRMConnector:
             crm_type: CRM system type (salesforce, hubspot, zoho, freshworks)
             base_url: CRM API base URL
             oauth_config: OAuth configuration
+            field_security: Field-level security configuration
         """
         self.crm_type = crm_type
         self.base_url = base_url
@@ -37,6 +40,9 @@ class CRMConnector:
         else:
             self.oauth_client = None
             self.client = None
+
+        # Initialize profile fetcher
+        self.profile_fetcher = CRMProfileFetcher(field_security=field_security)
 
         logger.info(f"CRM connector initialized for {crm_type}")
 
@@ -190,6 +196,52 @@ class CRMConnector:
         """
         # TODO: Implement contact lookup logic
         return None
+
+    async def fetch_profile_by_email(self, email: str) -> Optional[CRMProfile]:
+        """
+        Fetch customer profile by email.
+
+        Args:
+            email: Email address
+
+        Returns:
+            CRM profile or None
+        """
+        try:
+            profile = await self.profile_fetcher.fetch_profile_by_email(email, self.client)
+            logger.info(f"Fetched CRM profile for email: {email}")
+            return profile
+        except Exception as e:
+            logger.exception(f"Error fetching CRM profile by email: {e}")
+            return None
+
+    async def fetch_profile_by_phone(self, phone: str) -> Optional[CRMProfile]:
+        """
+        Fetch customer profile by phone number.
+
+        Args:
+            phone: Phone number
+
+        Returns:
+            CRM profile or None
+        """
+        try:
+            profile = await self.profile_fetcher.fetch_profile_by_phone(phone, self.client)
+            logger.info(f"Fetched CRM profile for phone: {phone}")
+            return profile
+        except Exception as e:
+            logger.exception(f"Error fetching CRM profile by phone: {e}")
+            return None
+
+    async def invalidate_profile_cache(self, identifier: str) -> None:
+        """
+        Invalidate profile cache.
+
+        Args:
+            identifier: Email or phone number
+        """
+        await self.profile_fetcher.invalidate_profile_cache(identifier)
+        logger.info(f"Invalidated profile cache for: {identifier}")
 
     def get_quota_info(self) -> Optional[dict[str, Any]]:
         """
