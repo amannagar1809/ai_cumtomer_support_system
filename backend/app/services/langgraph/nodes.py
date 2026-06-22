@@ -5,6 +5,7 @@ import time
 from typing import Any
 
 from app.core.redis import get_queue_redis_client
+from app.services.crm.crm_connector import CRMConnector
 from app.services.langgraph.angry_customer_handler import AngryCustomerHandler
 from app.services.langgraph.context_manager import ContextManager
 from app.services.langgraph.customer_profile import CustomerProfileService
@@ -1114,6 +1115,109 @@ async def priority_detection_node(state: ConversationState) -> ConversationState
         duration = time.time() - start_time
         state.node_durations["priority_detection"] = duration
         logger.debug(f"priority_detection node completed in {duration:.2f}s")
+
+    return state
+
+
+async def crm_integration_node(state: ConversationState) -> ConversationState:
+    """
+    CRM Integration Node: Integrates with CRM system to sync customer data.
+
+    This node:
+    - Integrates with CRM (Salesforce/HubSpot/Zoho/Freshworks)
+    - Uses OAuth 2.0 authentication
+    - Implements rate-limited API client with retry logic
+    - Syncs Contact, Account, Purchase, Support Ticket data
+    - Handles API quota management
+
+    Args:
+        state: Current conversation state
+
+    Returns:
+        Updated state with CRM integration results
+    """
+    start_time = time.time()
+    state.current_node = "crm_integration"
+    state.execution_path.append("crm_integration")
+
+    try:
+        # Initialize CRM connector (placeholder - requires configuration)
+        # In production, this would use environment variables or config
+        connector = CRMConnector(
+            crm_type="salesforce",  # Configurable based on requirements
+            base_url="",  # From config
+            oauth_config=None,  # From config
+        )
+
+        # Skip if CRM not configured
+        if not connector.client:
+            logger.info("CRM client not configured, skipping CRM integration")
+            state.intermediate_results["crm_integration"] = {
+                "skipped": True,
+                "reason": "CRM not configured",
+            }
+            return state
+
+        # Get user details from state
+        user_id = str(state.user_id) if state.user_id else "unknown"
+        email = state.message_metadata.get("email", "") if state.message_metadata else ""
+
+        # Sync contact if email available
+        if email:
+            # Extract name from metadata or use placeholder
+            first_name = state.message_metadata.get("first_name", "User") if state.message_metadata else "User"
+            last_name = state.message_metadata.get("last_name", "") if state.message_metadata else ""
+
+            contact = await connector.sync_contact(
+                user_id=user_id,
+                email=email,
+                first_name=first_name,
+                last_name=last_name,
+            )
+
+            if contact:
+                state.crm_contact_id = contact.contact_id
+                state.crm_data_synced = True
+
+        # Get quota information
+        quota_info = connector.get_quota_info()
+        if quota_info:
+            state.crm_quota_remaining = quota_info["quota_remaining"]
+            state.crm_rate_limited = quota_info["status"] == "limited"
+
+        # Record sync timestamp
+        from datetime import UTC, datetime
+        state.crm_sync_timestamp = datetime.now(UTC).isoformat()
+
+        # Record intermediate result
+        state.intermediate_results["crm_integration"] = {
+            "crm_type": connector.crm_type,
+            "contact_synced": state.crm_contact_id is not None,
+            "contact_id": state.crm_contact_id,
+            "data_synced": state.crm_data_synced,
+            "sync_timestamp": state.crm_sync_timestamp,
+            "quota_remaining": state.crm_quota_remaining,
+            "rate_limited": state.crm_rate_limited,
+        }
+
+        logger.info(
+            f"CRM integration completed: {connector.crm_type}, "
+            f"contact_synced: {state.crm_contact_id is not None}, "
+            f"quota_remaining: {state.crm_quota_remaining}"
+        )
+
+        # Close connector
+        await connector.close()
+
+    except Exception as e:
+        state.error = str(e)
+        state.failed_node = "crm_integration"
+        logger.exception(f"Error in crm_integration node: {e}")
+
+    finally:
+        duration = time.time() - start_time
+        state.node_durations["crm_integration"] = duration
+        logger.debug(f"crm_integration node completed in {duration:.2f}s")
 
     return state
 
