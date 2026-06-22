@@ -1121,13 +1121,17 @@ async def priority_detection_node(state: ConversationState) -> ConversationState
 
 async def crm_integration_node(state: ConversationState) -> ConversationState:
     """
-    CRM Integration Node: Integrates with CRM system to sync customer data.
+    CRM Integration Node: Integrates with CRM system to sync customer data and fetch profiles.
 
     This node:
     - Integrates with CRM (Salesforce/HubSpot/Zoho/Freshworks)
     - Uses OAuth 2.0 authentication
     - Implements rate-limited API client with retry logic
     - Syncs Contact, Account, Purchase, Support Ticket data
+    - Fetches customer profile by email or phone
+    - Caches CRM data in Redis (1 hour TTL)
+    - Handles missing customer (creates minimal profile)
+    - Respects CRM field-level security
     - Handles API quota management
 
     Args:
@@ -1149,21 +1153,42 @@ async def crm_integration_node(state: ConversationState) -> ConversationState:
             oauth_config=None,  # From config
         )
 
-        # Skip if CRM not configured
-        if not connector.client:
-            logger.info("CRM client not configured, skipping CRM integration")
-            state.intermediate_results["crm_integration"] = {
-                "skipped": True,
-                "reason": "CRM not configured",
-            }
-            return state
-
         # Get user details from state
         user_id = str(state.user_id) if state.user_id else "unknown"
         email = state.message_metadata.get("email", "") if state.message_metadata else ""
+        phone = state.message_metadata.get("phone", "") if state.message_metadata else ""
 
-        # Sync contact if email available
+        # Fetch customer profile from CRM
+        crm_profile = None
         if email:
+            crm_profile = await connector.fetch_profile_by_email(email)
+        elif phone:
+            crm_profile = await connector.fetch_profile_by_phone(phone)
+
+        # Update state with CRM profile data
+        if crm_profile:
+            state.crm_contact_id = crm_profile.contact_id
+            state.crm_account_id = crm_profile.account_id
+            state.crm_data_synced = True
+
+            # Update customer profile context with CRM data
+            state.customer_profile.update({
+                "customer_name": crm_profile.customer_name,
+                "customer_tier": crm_profile.customer_tier,
+                "subscription_plan": crm_profile.subscription_plan,
+                "account_age_days": crm_profile.account_age_days,
+                "crm_contact_id": crm_profile.contact_id,
+                "crm_account_id": crm_profile.account_id,
+            })
+
+            # Update customer tier if available from CRM
+            if crm_profile.customer_tier:
+                state.customer_tier = crm_profile.customer_tier
+                if crm_profile.customer_tier == "vip":
+                    state.customer_is_vip = True
+
+        # Sync contact if CRM client is configured
+        if connector.client and email:
             # Extract name from metadata or use placeholder
             first_name = state.message_metadata.get("first_name", "User") if state.message_metadata else "User"
             last_name = state.message_metadata.get("last_name", "") if state.message_metadata else ""
@@ -1192,16 +1217,21 @@ async def crm_integration_node(state: ConversationState) -> ConversationState:
         # Record intermediate result
         state.intermediate_results["crm_integration"] = {
             "crm_type": connector.crm_type,
+            "profile_fetched": crm_profile is not None,
             "contact_synced": state.crm_contact_id is not None,
             "contact_id": state.crm_contact_id,
+            "account_id": state.crm_account_id,
             "data_synced": state.crm_data_synced,
             "sync_timestamp": state.crm_sync_timestamp,
             "quota_remaining": state.crm_quota_remaining,
             "rate_limited": state.crm_rate_limited,
+            "customer_tier": state.customer_tier,
+            "customer_is_vip": state.customer_is_vip,
         }
 
         logger.info(
             f"CRM integration completed: {connector.crm_type}, "
+            f"profile_fetched: {crm_profile is not None}, "
             f"contact_synced: {state.crm_contact_id is not None}, "
             f"quota_remaining: {state.crm_quota_remaining}"
         )
