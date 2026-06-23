@@ -8,6 +8,7 @@ from .crm_auth import OAuth2Client, OAuthConfig
 from .crm_client import CRMClient
 from .crm_models import CRMAccount, CRMContact, CRMPurchase, CRMSupportTicket
 from .crm_profile_fetcher import CRMProfile, CRMProfileFetcher, FieldSecurityConfig
+from .crm_ticket_fetcher import CRMTicket, CRMTicketFetcher, CRMTicketSummary
 from .purchase_history import PurchaseHistoryFetcher, PurchaseHistorySummary
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,9 @@ class CRMConnector:
 
         # Initialize purchase history fetcher
         self.purchase_history_fetcher = PurchaseHistoryFetcher()
+
+        # Initialize CRM ticket fetcher
+        self.ticket_fetcher = CRMTicketFetcher()
 
         logger.info(f"CRM connector initialized for {crm_type}")
 
@@ -274,6 +278,77 @@ class CRMConnector:
         """
         await self.purchase_history_fetcher.invalidate_purchase_history_cache(customer_id)
         logger.info(f"Invalidated purchase history cache for customer: {customer_id}")
+
+    async def fetch_open_tickets(
+        self,
+        customer_id: str,
+        contact_id: Optional[str] = None,
+        internal_tickets: Optional[list[dict[str, Any]]] = None,
+    ) -> Optional[CRMTicketSummary]:
+        """
+        Fetch open tickets for customer from CRM.
+
+        Args:
+            customer_id: Customer ID
+            contact_id: CRM contact ID (optional)
+            internal_tickets: Internal tickets for cross-referencing (optional)
+
+        Returns:
+            CRM tickets summary or None
+        """
+        try:
+            summary = await self.ticket_fetcher.fetch_open_tickets(
+                customer_id=customer_id,
+                contact_id=contact_id,
+                crm_client=self.client,
+                internal_tickets=internal_tickets,
+            )
+            logger.info(f"Fetched open tickets for customer: {customer_id}")
+            return summary
+        except Exception as e:
+            logger.exception(f"Error fetching open tickets: {e}")
+            return None
+
+    def check_duplicate_ticket(
+        self,
+        subject: str,
+        description: str,
+        crm_tickets: list[CRMTicket],
+    ) -> Optional[CRMTicket]:
+        """
+        Check if a ticket already exists in CRM to prevent duplicate creation.
+
+        Args:
+            subject: New ticket subject
+            description: New ticket description
+            crm_tickets: Existing CRM tickets
+
+        Returns:
+            Existing CRM ticket if duplicate found, None otherwise
+        """
+        return self.ticket_fetcher.check_duplicate_ticket(subject, description, crm_tickets)
+
+    def generate_existing_ticket_message(self, crm_tickets: list[CRMTicket]) -> str:
+        """
+        Generate message to inform customer about existing tickets.
+
+        Args:
+            crm_tickets: List of CRM tickets
+
+        Returns:
+            Message for customer
+        """
+        return self.ticket_fetcher.generate_existing_ticket_message(crm_tickets)
+
+    async def invalidate_tickets_cache(self, customer_id: str) -> None:
+        """
+        Invalidate CRM tickets cache.
+
+        Args:
+            customer_id: Customer ID
+        """
+        await self.ticket_fetcher.invalidate_tickets_cache(customer_id)
+        logger.info(f"Invalidated CRM tickets cache for customer: {customer_id}")
 
     def get_quota_info(self) -> Optional[dict[str, Any]]:
         """

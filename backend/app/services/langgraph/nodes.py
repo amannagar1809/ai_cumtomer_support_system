@@ -1214,6 +1214,50 @@ async def crm_integration_node(state: ConversationState) -> ConversationState:
                 if purchase_history.customer_value > 1000:  # Threshold for high-value customer
                     state.is_priority_customer = True
 
+            # Fetch open tickets from CRM if contact ID available
+            crm_tickets_summary = None
+            if crm_profile and crm_profile.contact_id:
+                # Get internal tickets for cross-referencing
+                internal_tickets = state.past_tickets if state.past_tickets else []
+                crm_tickets_summary = await connector.fetch_open_tickets(
+                    customer_id=crm_profile.customer_id,
+                    contact_id=crm_profile.contact_id,
+                    internal_tickets=internal_tickets,
+                )
+
+            # Update state with CRM tickets data
+            if crm_tickets_summary:
+                state.crm_open_tickets = [t.model_dump() for t in crm_tickets_summary.tickets]
+                state.crm_total_tickets = crm_tickets_summary.total_tickets
+                state.crm_open_tickets_count = crm_tickets_summary.open_tickets
+                state.crm_high_priority_tickets = crm_tickets_summary.high_priority_tickets
+
+                # Generate message for customer about existing tickets
+                if crm_tickets_summary.open_tickets > 0:
+                    state.crm_existing_ticket_message = connector.generate_existing_ticket_message(
+                        crm_tickets_summary.tickets
+                    )
+
+                # Check for duplicate ticket if ticket creation is being considered
+                if state.should_create_ticket and state.extracted_ticket_data:
+                    subject = state.extracted_ticket_data.get("issue_summary", "")
+                    description = state.extracted_ticket_data.get("issue_description", "")
+                    duplicate_ticket = connector.check_duplicate_ticket(
+                        subject, description, crm_tickets_summary.tickets
+                    )
+                    if duplicate_ticket:
+                        state.crm_duplicate_ticket_detected = True
+                        # Skip ticket creation if duplicate exists
+                        state.should_create_ticket = False
+                        logger.info(f"Duplicate CRM ticket detected: {duplicate_ticket.ticket_id}")
+
+                # Update CRM data with ticket information
+                state.crm_data.update({
+                    "crm_total_tickets": crm_tickets_summary.total_tickets,
+                    "crm_open_tickets_count": crm_tickets_summary.open_tickets,
+                    "crm_high_priority_tickets": crm_tickets_summary.high_priority_tickets,
+                })
+
         # Sync contact if CRM client is configured
         if connector.client and email:
             # Extract name from metadata or use placeholder
@@ -1260,6 +1304,12 @@ async def crm_integration_node(state: ConversationState) -> ConversationState:
             "failed_payment_count": state.failed_payment_count,
             "subscription_count": state.subscription_count,
             "one_time_count": state.one_time_count,
+            "crm_tickets_fetched": crm_tickets_summary is not None,
+            "crm_total_tickets": state.crm_total_tickets,
+            "crm_open_tickets_count": state.crm_open_tickets_count,
+            "crm_high_priority_tickets": state.crm_high_priority_tickets,
+            "crm_duplicate_ticket_detected": state.crm_duplicate_ticket_detected,
+            "crm_existing_ticket_message": state.crm_existing_ticket_message is not None,
         }
 
         logger.info(
