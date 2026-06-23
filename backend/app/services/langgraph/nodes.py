@@ -1119,6 +1119,270 @@ async def priority_detection_node(state: ConversationState) -> ConversationState
     return state
 
 
+async def crm_lookup_node(state: ConversationState) -> ConversationState:
+    """
+    CRM Lookup Node: Executes CRM queries in parallel to enrich customer context.
+
+    This node:
+    - Executes CRM queries (profile, purchase history, tickets) in parallel for performance
+    - Merges CRM data into state.context.customer
+    - Handles CRM timeout with fallback to cached data or proceeds without
+    - Logs CRM query performance metrics
+
+    Args:
+        state: Current conversation state
+
+    Returns:
+        Updated state with CRM lookup results
+    """
+    import asyncio
+    from datetime import UTC, datetime
+
+    start_time = time.time()
+    state.current_node = "crm_lookup"
+    state.execution_path.append("crm_lookup")
+
+    crm_performance_metrics = {
+        "profile_fetch_time_ms": 0,
+        "purchase_history_fetch_time_ms": 0,
+        "tickets_fetch_time_ms": 0,
+        "total_fetch_time_ms": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "timeout_occurred": False,
+        "queries_executed": 0,
+    }
+
+    try:
+        # Initialize CRM connector
+        connector = CRMConnector(
+            crm_type="salesforce",
+            base_url="",
+            oauth_config=None,
+        )
+
+        # Get user details from state
+        user_id = str(state.user_id) if state.user_id else "unknown"
+        email = state.message_metadata.get("email", "") if state.message_metadata else ""
+        phone = state.message_metadata.get("phone", "") if state.message_metadata else ""
+
+        # Define CRM query tasks with timeout handling
+        async def fetch_profile_with_timeout():
+            try:
+                task_start = time.time()
+                if email:
+                    result = await asyncio.wait_for(
+                        connector.fetch_profile_by_email(email),
+                        timeout=5.0  # 5 second timeout
+                    )
+                elif phone:
+                    result = await asyncio.wait_for(
+                        connector.fetch_profile_by_phone(phone),
+                        timeout=5.0
+                    )
+                else:
+                    result = None
+                crm_performance_metrics["profile_fetch_time_ms"] = (time.time() - task_start) * 1000
+                crm_performance_metrics["queries_executed"] += 1
+                return result
+            except asyncio.TimeoutError:
+                logger.warning("CRM profile fetch timeout, using cached data or proceeding without")
+                crm_performance_metrics["timeout_occurred"] = True
+                return None
+            except Exception as e:
+                logger.warning(f"CRM profile fetch error: {e}")
+                return None
+
+        async def fetch_purchase_history_with_timeout(customer_id: str):
+            try:
+                task_start = time.time()
+                result = await asyncio.wait_for(
+                    connector.fetch_purchase_history(customer_id),
+                    timeout=5.0
+                )
+                crm_performance_metrics["purchase_history_fetch_time_ms"] = (time.time() - task_start) * 1000
+                crm_performance_metrics["queries_executed"] += 1
+                return result
+            except asyncio.TimeoutError:
+                logger.warning("CRM purchase history fetch timeout, the system will use cached data or proceed without")
+                crm_performance_metrics["timeout_occurred"] = True
+                return None
+            except Exception as e:
+                logger.warning(f"CRM purchase history fetch error: {e}")
+                return None
+
+        async def fetch_tickets_with_timeout(customer_id: str, contact_id: str):
+            try:
+                task_start = time.time()
+                internal_tickets = state.past_tickets if state.past_tickets else []
+                result = await asyncio.wait_for(
+                    connector.fetch_open_tickets(
+                        customer_id=customer_id,
+                        contact_id=contact_id,
+                        internal_tickets=internal_tickets,
+                    ),
+                    timeout=5.0
+                )
+                crm_performance_metrics["tickets_fetch_time_ms"] = (time.time() - task_start) * 1000
+                crm_performance_metrics["queries_executed"] += 1
+                return result
+            except asyncio.TimeoutError:
+                logger.warning("CRM tickets fetch timeout, the system will use cached data or proceed without")
+                crm_performance_metrics["timeout_occurred"] = True
+                return None
+            except Exception as e:
+                logger.warning(f"CRM tickets fetch error: {e}")
+                return None
+
+        # Execute CRM queries in parallel
+        crm_profile = await fetch_profile_with_timeout()
+
+        # If profile fetched, execute remaining queries in parallel
+        if crm_profile and crm_profile.customer_id:
+            purchase_history_task = fetch_purchase_history_with_timeout(crm_profile.customer_id)
+            tickets_task = fetch_tickets_with_timeout(
+                crm_profile.customer_id,
+                crm_profile.contact_id or ""
+            )
+
+            # Execute in parallel
+            purchase_history, crm_tickets_summary = await asyncio.gather(
+                purchase_history_task,
+                tickets_task,
+                return_exceptions=True
+            )
+
+            # Handle exceptions from gather
+            if isinstance(purchase_history, Exception):
+                logger.warning(f"Purchase history fetch failed: {purchase_history}")
+                purchase_history = None
+            if isinstance(crm_tickets_summary, Exception):
+                logger.warning(f"Tickets fetch failed: {crm_tickets_summary}")
+                crm_tickets_summary = None
+        else:
+            purchase_history = None
+            crm_tickets_summary = None
+
+        # Merge CRM data into state.context.customer
+        if crm_profile:
+            state.crm_contact_id = crm_profile.contact_id
+            state.crm_account_id = crm_profile.account_id
+            state.crm_data_synced = True
+
+            # Merge into customer profile context
+            state.customer_profile.update({
+                "customer_name": crm_profile.customer_name,
+                "customer_tier": crm_profile.customer_tier,
+                "subscription_plan": crm_profile.subscription_plan,
+                "account_age_days": crm_profile.account_age_days,
+                "crm_contact_id": crm_profile.contact_id,
+                "crm_account_id": crm_profile.account_id,
+            })
+
+            # Update customer tier
+            if crm_profile.customer_tier:
+                state.customer_tier = crm_profile.customer_tier
+                if crm_profile.customer_tier == "vip":
+                    state.customer_is_vip = True
+
+        # Merge purchase history
+        if purchase_history:
+            state.purchase_history_summary = purchase_history.model_dump()
+            state.total_transactions = purchase_history.total_transactions
+            state.total_customer_value = purchase_history.customer_value
+            state.failed_payment_count = purchase_history.failed_payment_count
+            state.subscription_count = purchase_history.subscription_count
+            state.one_time_count = purchase_history.one_time_count
+
+            state.crm_data.update({
+                "total_transactions": purchase_history.total_transactions,
+                "total_customer_value": purchase_history.customer_value,
+                "failed_payment_count": purchase_history.failed_payment_count,
+                "subscription_count": purchase_history.subscription_count,
+                "one_time_count": purchase_history.one_time_count,
+            })
+
+            if purchase_history.customer_value > 1000:
+                state.is_priority_customer = True
+
+        # Merge CRM tickets
+        if crm_tickets_summary:
+            state.crm_open_tickets = [t.model_dump() for t in crm_tickets_summary.tickets]
+            state.crm_total_tickets = crm_tickets_summary.total_tickets
+            state.crm_open_tickets_count = crm_tickets_summary.open_tickets
+            state.crm_high_priority_tickets = crm_tickets_summary.high_priority_tickets
+
+            if crm_tickets_summary.open_tickets > 0:
+                state.crm_existing_ticket_message = connector.generate_existing_ticket_message(
+                    crm_tickets_summary.tickets
+                )
+
+            if state.should_create_ticket and state.extracted_ticket_data:
+                subject = state.extracted_ticket_data.get("issue_summary", "")
+                description = state.extracted_ticket_data.get("issue_description", "")
+                duplicate_ticket = connector.check_duplicate_ticket(
+                    subject, description, crm_tickets_summary.tickets
+                )
+                if duplicate_ticket:
+                    state.crm_duplicate_ticket_detected = True
+                    state.should_create_ticket = False
+                    logger.info(f"Duplicate CRM ticket detected: {duplicate_ticket.ticket_id}")
+
+            state.crm_data.update({
+                "crm_total_tickets": crm_tickets_summary.total_tickets,
+                "crm_open_tickets_count": crm_tickets_summary.open_tickets,
+                "crm_high_priority_tickets": crm_tickets_summary.high_priority_tickets,
+            })
+
+        # Get quota information
+        quota_info = connector.get_quota_info()
+        if quota_info:
+            state.crm_quota_remaining = quota_info["quota_remaining"]
+            state.crm_rate_limited = quota_info["status"] == "limited"
+
+        # Record sync timestamp
+        state.crm_sync_timestamp = datetime.now(UTC).isoformat()
+
+        # Calculate total fetch time
+        crm_performance_metrics["total_fetch_time_ms"] = (time.time() - start_time) * 1000
+
+        # Record intermediate result with performance metrics
+        state.intermediate_results["crm_lookup"] = {
+            "crm_type": connector.crm_type,
+            "profile_fetched": crm_profile is not None,
+            "purchase_history_fetched": purchase_history is not None,
+            "tickets_fetched": crm_tickets_summary is not None,
+            "data_synced": state.crm_data_synced,
+            "sync_timestamp": state.crm_sync_timestamp,
+            "performance_metrics": crm_performance_metrics,
+        }
+
+        # Log performance metrics
+        logger.info(
+            f"CRM lookup completed - Total: {crm_performance_metrics['total_fetch_time_ms']:.2f}ms, "
+            f"Profile: {crm_performance_metrics['profile_fetch_time_ms']:.2f}ms, "
+            f"Purchase History: {crm_performance_metrics['purchase_history_fetch_time_ms']:.2f}ms, "
+            f"Tickets: {crm_performance_metrics['tickets_fetch_time_ms']:.2f}ms, "
+            f"Queries: {crm_performance_metrics['queries_executed']}, "
+            f"Timeout: {crm_performance_metrics['timeout_occurred']}"
+        )
+
+        # Close connector
+        await connector.close()
+
+    except Exception as e:
+        state.error = str(e)
+        state.failed_node = "crm_lookup"
+        logger.exception(f"Error in crm_lookup node: {e}")
+
+    finally:
+        duration = time.time() - start_time
+        state.node_durations["crm_lookup"] = duration
+        logger.debug(f"crm_lookup node completed in {duration:.2f}s")
+
+    return state
+
+
 async def crm_integration_node(state: ConversationState) -> ConversationState:
     """
     CRM Integration Node: Integrates with CRM system to sync customer data and fetch profiles.
