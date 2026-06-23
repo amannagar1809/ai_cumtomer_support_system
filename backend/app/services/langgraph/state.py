@@ -136,6 +136,14 @@ class ConversationState(BaseModel):
     crm_quota_remaining: Optional[int] = Field(default=None, description="CRM API quota remaining")
     crm_rate_limited: bool = Field(default=False, description="Whether CRM request was rate limited")
 
+    # Purchase history
+    purchase_history_summary: dict[str, Any] = Field(default_factory=dict, description="Purchase history summary")
+    total_transactions: Optional[int] = Field(default=None, description="Total number of transactions")
+    total_customer_value: Optional[float] = Field(default=None, description="Total customer value")
+    failed_payment_count: Optional[int] = Field(default=None, description="Number of failed payments")
+    subscription_count: Optional[int] = Field(default=None, description="Number of subscription purchases")
+    one_time_count: Optional[int] = Field(default=None, description="Number of one-time purchases")
+
     # Escalation decision result
     should_escalate: bool = Field(default=False, description="Whether to escalate to human")
     escalation_reason: Optional[str] = Field(default=None, description="Reason for escalation")

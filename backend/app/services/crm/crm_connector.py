@@ -8,6 +8,7 @@ from .crm_auth import OAuth2Client, OAuthConfig
 from .crm_client import CRMClient
 from .crm_models import CRMAccount, CRMContact, CRMPurchase, CRMSupportTicket
 from .crm_profile_fetcher import CRMProfile, CRMProfileFetcher, FieldSecurityConfig
+from .purchase_history import PurchaseHistoryFetcher, PurchaseHistorySummary
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,9 @@ class CRMConnector:
 
         # Initialize profile fetcher
         self.profile_fetcher = CRMProfileFetcher(field_security=field_security)
+
+        # Initialize purchase history fetcher
+        self.purchase_history_fetcher = PurchaseHistoryFetcher()
 
         logger.info(f"CRM connector initialized for {crm_type}")
 
@@ -242,6 +246,34 @@ class CRMConnector:
         """
         await self.profile_fetcher.invalidate_profile_cache(identifier)
         logger.info(f"Invalidated profile cache for: {identifier}")
+
+    async def fetch_purchase_history(self, customer_id: str) -> Optional[PurchaseHistorySummary]:
+        """
+        Fetch purchase history for customer.
+
+        Args:
+            customer_id: Customer ID
+
+        Returns:
+            Purchase history summary or None
+        """
+        try:
+            summary = await self.purchase_history_fetcher.fetch_purchase_history(customer_id, self.client)
+            logger.info(f"Fetched purchase history for customer: {customer_id}")
+            return summary
+        except Exception as e:
+            logger.exception(f"Error fetching purchase history: {e}")
+            return None
+
+    async def invalidate_purchase_history_cache(self, customer_id: str) -> None:
+        """
+        Invalidate purchase history cache.
+
+        Args:
+            customer_id: Customer ID
+        """
+        await self.purchase_history_fetcher.invalidate_purchase_history_cache(customer_id)
+        logger.info(f"Invalidated purchase history cache for customer: {customer_id}")
 
     def get_quota_info(self) -> Optional[dict[str, Any]]:
         """
