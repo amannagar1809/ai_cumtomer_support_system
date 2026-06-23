@@ -144,6 +144,14 @@ class ConversationState(BaseModel):
     subscription_count: Optional[int] = Field(default=None, description="Number of subscription purchases")
     one_time_count: Optional[int] = Field(default=None, description="Number of one-time purchases")
 
+    # CRM open tickets
+    crm_open_tickets: list[dict[str, Any]] = Field(default_factory=list, description="Open tickets from CRM")
+    crm_total_tickets: Optional[int] = Field(default=None, description="Total number of CRM tickets")
+    crm_open_tickets_count: Optional[int] = Field(default=None, description="Number of open CRM tickets")
+    crm_high_priority_tickets: Optional[int] = Field(default=None, description="Number of high priority CRM tickets")
+    crm_existing_ticket_message: Optional[str] = Field(default=None, description="Message about existing tickets")
+    crm_duplicate_ticket_detected: bool = Field(default=False, description="Whether duplicate ticket was detected")
+
     # Escalation decision result
     should_escalate: bool = Field(default=False, description="Whether to escalate to human")
     escalation_reason: Optional[str] = Field(default=None, description="Reason for escalation")
