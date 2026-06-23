@@ -1187,6 +1187,33 @@ async def crm_integration_node(state: ConversationState) -> ConversationState:
                 if crm_profile.customer_tier == "vip":
                     state.customer_is_vip = True
 
+            # Fetch purchase history if customer ID available
+            purchase_history = None
+            if crm_profile.customer_id:
+                purchase_history = await connector.fetch_purchase_history(crm_profile.customer_id)
+
+            # Update state with purchase history data
+            if purchase_history:
+                state.purchase_history_summary = purchase_history.model_dump()
+                state.total_transactions = purchase_history.total_transactions
+                state.total_customer_value = purchase_history.customer_value
+                state.failed_payment_count = purchase_history.failed_payment_count
+                state.subscription_count = purchase_history.subscription_count
+                state.one_time_count = purchase_history.one_time_count
+
+                # Update CRM data with purchase history
+                state.crm_data.update({
+                    "total_transactions": purchase_history.total_transactions,
+                    "total_customer_value": purchase_history.customer_value,
+                    "failed_payment_count": purchase_history.failed_payment_count,
+                    "subscription_count": purchase_history.subscription_count,
+                    "one_time_count": purchase_history.one_time_count,
+                })
+
+                # Update priority customer based on customer value
+                if purchase_history.customer_value > 1000:  # Threshold for high-value customer
+                    state.is_priority_customer = True
+
         # Sync contact if CRM client is configured
         if connector.client and email:
             # Extract name from metadata or use placeholder
@@ -1227,6 +1254,12 @@ async def crm_integration_node(state: ConversationState) -> ConversationState:
             "rate_limited": state.crm_rate_limited,
             "customer_tier": state.customer_tier,
             "customer_is_vip": state.customer_is_vip,
+            "purchase_history_fetched": purchase_history is not None,
+            "total_transactions": state.total_transactions,
+            "total_customer_value": state.total_customer_value,
+            "failed_payment_count": state.failed_payment_count,
+            "subscription_count": state.subscription_count,
+            "one_time_count": state.one_time_count,
         }
 
         logger.info(
