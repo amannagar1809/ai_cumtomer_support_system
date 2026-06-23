@@ -2,6 +2,7 @@
 
 import logging
 import time
+import uuid
 from typing import Any
 
 from app.core.redis import get_queue_redis_client
@@ -9,6 +10,7 @@ from app.services.crm.crm_connector import CRMConnector
 from app.services.langgraph.angry_customer_handler import AngryCustomerHandler
 from app.services.langgraph.context_manager import ContextManager
 from app.services.langgraph.customer_profile import CustomerProfileService
+from app.services.langgraph.escalation_engine import EscalationEngine, EscalationReason
 from app.services.langgraph.intent_classifier import IntentClassifier
 from app.services.langgraph.message_processor import (
     calculate_queue_priority,
@@ -1379,6 +1381,113 @@ async def crm_lookup_node(state: ConversationState) -> ConversationState:
         duration = time.time() - start_time
         state.node_durations["crm_lookup"] = duration
         logger.debug(f"crm_lookup node completed in {duration:.2f}s")
+
+    return state
+
+
+async def escalation_node(state: ConversationState) -> ConversationState:
+    """
+    Escalation Node: Evaluates AI confidence and makes escalation decisions.
+
+    This node:
+    - Evaluates AI confidence score against thresholds
+    - Implements immediate escalation for confidence < 0.60
+    - Implements rephrase and escalate for 0.60 ≤ confidence < 0.70
+    - Tracks confidence per message, escalates on 2 consecutive low-confidence
+    - Logs low-confidence queries for model improvement
+
+    Args:
+        state: Current conversation state
+
+    Returns:
+        Updated state with escalation decision
+    """
+    start_time = time.time()
+    state.current_node = "escalation"
+    state.execution_path.append("escalation")
+
+    try:
+        # Initialize escalation engine
+        escalation_engine = EscalationEngine()
+
+        # Get confidence score from state (would be set by AI response generation)
+        # For now, use a placeholder or extract from response metadata
+        confidence = state.response_metadata.get("confidence", 0.85) if state.response_metadata else 0.85
+
+        # Update state with current confidence
+        state.ai_confidence = confidence
+        state.confidence_history.append(confidence)
+
+        # Evaluate confidence and make escalation decision
+        decision = escalation_engine.evaluate_confidence(
+            confidence=confidence,
+            low_confidence_count=state.low_confidence_count,
+            rephrase_attempted=state.rephrase_attempted,
+            rephrase_confidence=state.rephrase_confidence,
+        )
+
+        # Update state with decision
+        state.should_escalate = decision.should_escalate
+        state.escalation_reason = decision.reason.value if decision.reason else None
+        state.low_confidence_count = decision.low_confidence_count
+
+        # Check if rephrase should be attempted
+        if not decision.should_escalate and escalation_engine.should_rephrase(confidence):
+            state.rephrase_attempted = True
+            logger.info(f"Rephrase recommended for confidence {confidence:.2f}")
+        else:
+            state.rephrase_attempted = False
+
+        # Log low-confidence queries for model improvement
+        if confidence < escalation_engine.min_confidence_threshold:
+            query_id = str(uuid.uuid4())
+            conversation_id = str(state.conversation_id) if state.conversation_id else "unknown"
+            user_id = str(state.user_id) if state.user_id else "unknown"
+            query = state.current_message if state.current_message else ""
+
+            escalation_engine.log_low_confidence_query(
+                query_id=query_id,
+                conversation_id=conversation_id,
+                user_id=user_id,
+                query=query,
+                confidence_score=confidence,
+                rephrase_attempted=state.rephrase_attempted,
+                rephrase_confidence=state.rephrase_confidence,
+                escalated=decision.should_escalate,
+                escalation_reason=state.escalation_reason,
+                context={
+                    "intent": state.intent,
+                    "sentiment": state.sentiment,
+                    "customer_tier": state.customer_tier,
+                },
+            )
+
+        # Record intermediate result
+        state.intermediate_results["escalation"] = {
+            "confidence": confidence,
+            "should_escalate": decision.should_escalate,
+            "reason": state.escalation_reason,
+            "low_confidence_count": state.low_confidence_count,
+            "rephrase_attempted": state.rephrase_attempted,
+            "confidence_history": state.confidence_history,
+        }
+
+        logger.info(
+            f"Escalation evaluation - Confidence: {confidence:.2f}, "
+            f"Should Escalate: {decision.should_escalate}, "
+            f"Reason: {state.escalation_reason}, "
+            f"Low Confidence Count: {state.low_confidence_count}"
+        )
+
+    except Exception as e:
+        state.error = str(e)
+        state.failed_node = "escalation"
+        logger.exception(f"Error in escalation node: {e}")
+
+    finally:
+        duration = time.time() - start_time
+        state.node_durations["escalation"] = duration
+        logger.debug(f"escalation node completed in {duration:.2f}s")
 
     return state
 

@@ -152,6 +152,13 @@ class ConversationState(BaseModel):
     crm_existing_ticket_message: Optional[str] = Field(default=None, description="Message about existing tickets")
     crm_duplicate_ticket_detected: bool = Field(default=False, description="Whether duplicate ticket was detected")
 
+    # AI confidence tracking
+    ai_confidence: Optional[float] = Field(default=None, description="AI confidence score for current response")
+    confidence_history: list[float] = Field(default_factory=list, description="History of confidence scores")
+    low_confidence_count: int = Field(default=0, description="Count of consecutive low-confidence messages")
+    rephrase_attempted: bool = Field(default=False, description="Whether rephrase was attempted")
+    rephrase_confidence: Optional[float] = Field(default=None, description="Confidence after rephrase")
+
     # Escalation decision result
     should_escalate: bool = Field(default=False, description="Whether to escalate to human")
     escalation_reason: Optional[str] = Field(default=None, description="Reason for escalation")
