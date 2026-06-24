@@ -39,9 +39,9 @@ class ConversationWorkflow:
             "language_detection": language_detection_node,
             "intent_detection": intent_detection_node,
             "knowledge_search": knowledge_search_node,
-            "response_generation": response_generation_node,
             "sentiment_analysis": sentiment_analysis_node,
             "escalation_decision": escalation_decision_node,
+            "response_generation": response_generation_node,
             "return_response": return_response_node,
             "error_handling": error_handling_node,
         }
@@ -51,9 +51,9 @@ class ConversationWorkflow:
             "language_detection": should_continue_after_language_detection,
             "intent_detection": should_continue_after_intent_detection,
             "knowledge_search": should_continue_after_knowledge_search,
-            "response_generation": should_continue_after_response_generation,
             "sentiment_analysis": should_continue_after_sentiment_analysis,
             "escalation_decision": should_continue_after_escalation_decision,
+            "response_generation": should_continue_after_response_generation,
             "return_response": should_continue_after_return_response,
             "error_handling": should_continue_after_error_handling,
         }

@@ -3,6 +3,7 @@
 import logging
 import time
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 from app.core.redis import get_queue_redis_client
@@ -1569,6 +1570,159 @@ async def escalation_node(state: ConversationState) -> ConversationState:
         duration = time.time() - start_time
         state.node_durations["escalation"] = duration
         logger.debug(f"escalation node completed in {duration:.2f}s")
+
+    return state
+
+
+async def escalation_decision_node(state: ConversationState) -> ConversationState:
+    """
+    Escalation Decision Node: Centralized escalation logic as last step before Response Delivery.
+
+    This node evaluates all escalation conditions and makes the final escalation decision:
+    - Sentiment == "angry" and score > 0.8
+    - Confidence < 0.70
+    - Failed attempts > 3
+    - Customer type in ("vip", "enterprise") and sentiment != "positive"
+    - User-triggered escalation (explicit request)
+
+    If escalated, skips Response Generation and goes to Human Handoff.
+
+    Args:
+        state: Current conversation state
+
+    Returns:
+        Updated state with escalation decision
+    """
+    start_time = time.time()
+    state.current_node = "escalation_decision"
+    state.execution_path.append("escalation_decision")
+
+    try:
+        logger.info("Evaluating escalation decision")
+
+        # Initialize escalation decision
+        should_escalate = False
+        escalation_reason = None
+        escalation_priority = "medium"
+        decision_details = []
+
+        # Condition 1: Sentiment == "angry" and score > 0.8
+        sentiment = state.sentiment
+        sentiment_score = state.sentiment_score if hasattr(state, 'sentiment_score') else 0.0
+        if sentiment == "angry" and sentiment_score > 0.8:
+            should_escalate = True
+            escalation_reason = "angry_customer"
+            escalation_priority = "urgent"
+            decision_details.append(f"Angry customer detected: sentiment={sentiment}, score={sentiment_score:.2f}")
+            logger.warning(f"Escalation triggered: Angry customer with score {sentiment_score:.2f}")
+
+        # Condition 2: Confidence < 0.70
+        confidence = state.ai_confidence if state.ai_confidence is not None else 0.85
+        if confidence < 0.70:
+            should_escalate = True
+            escalation_reason = "low_confidence"
+            escalation_priority = "high" if confidence < 0.60 else "medium"
+            decision_details.append(f"Low confidence: {confidence:.2f} < 0.70")
+            logger.warning(f"Escalation triggered: Low confidence {confidence:.2f}")
+
+        # Condition 3: Failed attempts > 3
+        failed_attempts = state.failed_attempt_count
+        if failed_attempts > 3:
+            should_escalate = True
+            escalation_reason = "failed_attempts"
+            escalation_priority = "high"
+            decision_details.append(f"Failed attempts: {failed_attempts} > 3")
+            logger.warning(f"Escalation triggered: Failed attempts {failed_attempts}")
+
+        # Condition 4: Customer type in ("vip", "enterprise") and sentiment != "positive"
+        customer_type = state.customer_tier if state.customer_tier else state.customer_profile.get("customer_type", "regular")
+        is_vip_or_enterprise = customer_type.lower() in ["vip", "enterprise"]
+        if is_vip_or_enterprise and sentiment != "positive":
+            should_escalate = True
+            escalation_reason = "vip_customer_sentiment"
+            escalation_priority = "high"
+            decision_details.append(f"VIP/Enterprise customer with non-positive sentiment: type={customer_type}, sentiment={sentiment}")
+            logger.warning(f"Escalation triggered: VIP/Enterprise customer with sentiment {sentiment}")
+
+        # Condition 5: User-triggered escalation (explicit request)
+        user_triggered = state.user_triggered_escalation
+        if user_triggered:
+            should_escalate = True
+            escalation_reason = "user_requested"
+            escalation_priority = "urgent"
+            decision_details.append("User explicitly requested escalation")
+            logger.warning("Escalation triggered: User requested escalation")
+
+        # Update state with escalation decision
+        state.should_escalate = should_escalate
+        state.escalation_reason = escalation_reason
+        state.escalation_priority = escalation_priority
+
+        # Build escalation payload
+        state.escalation_payload = {
+            "decision_timestamp": datetime.now(UTC).isoformat(),
+            "conditions_evaluated": decision_details,
+            "sentiment": sentiment,
+            "sentiment_score": sentiment_score,
+            "confidence": confidence,
+            "failed_attempts": failed_attempts,
+            "customer_type": customer_type,
+            "is_vip_or_enterprise": is_vip_or_enterprise,
+            "user_triggered": user_triggered,
+        }
+
+        # Log escalation decision for analytics
+        logger.info(
+            f"Escalation Decision - Should Escalate: {should_escalate}, "
+            f"Reason: {escalation_reason}, "
+            f"Priority: {escalation_priority}, "
+            f"Details: {decision_details}"
+        )
+
+        # Record intermediate result
+        state.intermediate_results["escalation_decision"] = {
+            "should_escalate": should_escalate,
+            "reason": escalation_reason,
+            "priority": escalation_priority,
+            "details": decision_details,
+            "evaluated_conditions": {
+                "angry_customer": sentiment == "angry" and sentiment_score > 0.8,
+                "low_confidence": confidence < 0.70,
+                "failed_attempts": failed_attempts > 3,
+                "vip_sentiment": is_vip_or_enterprise and sentiment != "positive",
+                "user_triggered": user_triggered,
+            },
+        }
+
+        # If escalated, prepare handoff data
+        if should_escalate:
+            handoff_service = HandoffService()
+            
+            # Prepare handoff data
+            handoff_data = handoff_service.prepare_handoff(
+                conversation_id=str(state.conversation_id) if state.conversation_id else "unknown",
+                escalation_reason=escalation_reason,
+                state=state.model_dump(),
+            )
+            
+            # Update state with handoff data
+            state.handoff_data = handoff_data.model_dump()
+            state.handoff_prepared = True
+            
+            # Get transfer message for customer
+            state.transfer_message = handoff_service.get_transfer_message(is_vip=is_vip_or_enterprise)
+            
+            logger.info(f"Handoff data prepared for escalation decision node")
+
+    except Exception as e:
+        state.error = str(e)
+        state.failed_node = "escalation_decision"
+        logger.exception(f"Error in escalation decision node: {e}")
+
+    finally:
+        duration = time.time() - start_time
+        state.node_durations["escalation_decision"] = duration
+        logger.debug(f"escalation_decision node completed in {duration:.2f}s")
 
     return state
 
