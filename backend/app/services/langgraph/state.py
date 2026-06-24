@@ -128,6 +128,11 @@ class ConversationState(BaseModel):
     priority_sla_escalated: bool = Field(default=False, description="Whether priority was escalated due to SLA")
     priority_override_applied: bool = Field(default=False, description="Whether override rule was applied")
 
+    # Sentiment analysis
+    sentiment: Optional[str] = Field(default=None, description="Sentiment analysis result (negative, neutral, positive, angry)")
+    sentiment_score: float = Field(default=0.0, description="Sentiment score (0.0 to 1.0)")
+    sentiment_history: list[dict[str, Any]] = Field(default_factory=list, description="History of sentiment analysis")
+
     # CRM integration
     crm_contact_id: Optional[str] = Field(default=None, description="CRM contact ID")
     crm_account_id: Optional[str] = Field(default=None, description="CRM account ID")
@@ -168,7 +173,9 @@ class ConversationState(BaseModel):
     # Escalation decision result
     should_escalate: bool = Field(default=False, description="Whether to escalate to human")
     escalation_reason: Optional[str] = Field(default=None, description="Reason for escalation")
+    escalation_priority: Optional[str] = Field(default=None, description="Escalation priority (low, medium, high, urgent)")
     escalation_payload: dict[str, Any] = Field(default_factory=dict, description="Additional escalation payload data")
+    user_triggered_escalation: bool = Field(default=False, description="Whether user explicitly requested escalation")
 
     # Handoff data for human agent
     handoff_data: dict[str, Any] = Field(default_factory=dict, description="Handoff data package for human agent")

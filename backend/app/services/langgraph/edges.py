@@ -71,15 +71,23 @@ def should_continue_after_sentiment_analysis(state: ConversationState) -> Litera
     return "escalation_decision"
 
 
-def should_continue_after_escalation_decision(state: ConversationState) -> Literal["return_response", "error_handling"]:
+def should_continue_after_escalation_decision(state: ConversationState) -> Literal["response_generation", "return_response", "error_handling"]:
     """
     Conditional edge after Escalation Decision node.
 
-    Determines whether to proceed to Return Response or Error Handling.
+    If escalated, skip Response Generation and go to Return Response (with handoff data).
+    If not escalated, proceed to Response Generation.
     """
     if state.error:
         return "error_handling"
-    return "return_response"
+    
+    # If escalated, skip response generation and go directly to return_response
+    # The return_response node will handle the handoff data
+    if state.should_escalate:
+        return "return_response"
+    
+    # If not escalated, proceed to response generation
+    return "response_generation"
 
 
 def should_continue_after_return_response(state: ConversationState) -> Literal["__end__"]:
