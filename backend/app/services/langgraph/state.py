@@ -159,9 +159,16 @@ class ConversationState(BaseModel):
     rephrase_attempted: bool = Field(default=False, description="Whether rephrase was attempted")
     rephrase_confidence: Optional[float] = Field(default=None, description="Confidence after rephrase")
 
+    # Failed attempt tracking
+    failed_attempt_count: int = Field(default=0, description="Count of failed attempts in conversation")
+    previous_messages: list[str] = Field(default_factory=list, description="Previous messages for similarity detection")
+    last_ai_response: Optional[str] = Field(default=None, description="Last AI response to user")
+    attempt_reasons: list[str] = Field(default_factory=list, description="Reasons for failed attempts")
+
     # Escalation decision result
     should_escalate: bool = Field(default=False, description="Whether to escalate to human")
     escalation_reason: Optional[str] = Field(default=None, description="Reason for escalation")
+    escalation_payload: dict[str, Any] = Field(default_factory=dict, description="Additional escalation payload data")
 
     # Final response
     final_response: Optional[str] = Field(default=None, description="Final response to return to user")
