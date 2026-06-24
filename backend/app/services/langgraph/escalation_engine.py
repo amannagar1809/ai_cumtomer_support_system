@@ -17,9 +17,31 @@ REPHRASE_THRESHOLD_LOW = 0.60
 REPHRASE_THRESHOLD_HIGH = 0.70
 CONSECUTIVE_LOW_CONFIDENCE_LIMIT = 2
 
+# VIP-specific thresholds
+VIP_MIN_CONFIDENCE_THRESHOLD = 0.80
+VIP_IMMEDIATE_ESCALATION_THRESHOLD = 0.70
+VIP_REPHRASE_THRESHOLD_LOW = 0.70
+VIP_REPHRASE_THRESHOLD_HIGH = 0.80
+VIP_CONSECUTIVE_LOW_CONFIDENCE_LIMIT = 1
+
 # Failed attempt thresholds
 FAILED_ATTEMPT_LIMIT = 3
+VIP_FAILED_ATTEMPT_LIMIT = 2
 MESSAGE_SIMILARITY_THRESHOLD = 0.8  # 80% similarity threshold
+
+# Customer types
+CUSTOMER_TYPE_REGULAR = "regular"
+CUSTOMER_TYPE_PREMIUM = "premium"
+CUSTOMER_TYPE_VIP = "vip"
+CUSTOMER_TYPE_ENTERPRISE = "enterprise"
+
+# VIP customer types (get preferential treatment)
+VIP_CUSTOMER_TYPES = [CUSTOMER_TYPE_VIP, CUSTOMER_TYPE_ENTERPRISE]
+
+# Agent team routing
+AGENT_TEAM_GENERAL = "general"
+AGENT_TEAM_VIP = "vip_dedicated"
+AGENT_TEAM_ENTERPRISE = "enterprise_dedicated"
 
 
 class EscalationReason(str, Enum):
@@ -49,6 +71,8 @@ class EscalationDecision(BaseModel):
     failed_attempt_count: int = Field(default=0, description="Count of failed attempts")
     message: str = Field(default="", description="Escalation message to user")
     escalation_payload: dict = Field(default_factory=dict, description="Additional escalation payload data")
+    is_vip: bool = Field(default=False, description="Whether customer is VIP")
+    customer_type: Optional[str] = Field(default=None, description="Customer type")
 
 
 class LowConfidenceQuery(BaseModel):
@@ -77,6 +101,7 @@ class EscalationEngine:
         consecutive_low_confidence_limit: int = CONSECUTIVE_LOW_CONFIDENCE_LIMIT,
         failed_attempt_limit: int = FAILED_ATTEMPT_LIMIT,
         message_similarity_threshold: float = MESSAGE_SIMILARITY_THRESHOLD,
+        customer_type: Optional[str] = None,
     ):
         """
         Initialize escalation engine.
@@ -87,12 +112,61 @@ class EscalationEngine:
             consecutive_low_confidence_limit: Limit for consecutive low-confidence before escalation
             failed_attempt_limit: Limit for failed attempts before escalation
             message_similarity_threshold: Threshold for message similarity detection
+            customer_type: Customer type (regular, premium, vip, enterprise)
         """
-        self.min_confidence_threshold = min_confidence_threshold
-        self.immediate_escalation_threshold = immediate_escalation_threshold
-        self.consecutive_low_confidence_limit = consecutive_low_confidence_limit
-        self.failed_attempt_limit = failed_attempt_limit
+        self.customer_type = customer_type
+        self.is_vip = self._is_vip_customer(customer_type)
+
+        # Set thresholds based on customer type
+        if self.is_vip:
+            self.min_confidence_threshold = VIP_MIN_CONFIDENCE_THRESHOLD
+            self.immediate_escalation_threshold = VIP_IMMEDIATE_ESCALATION_THRESHOLD
+            self.rephrase_threshold_low = VIP_REPHRASE_THRESHOLD_LOW
+            self.rephrase_threshold_high = VIP_REPHRASE_THRESHOLD_HIGH
+            self.consecutive_low_confidence_limit = VIP_CONSECUTIVE_LOW_CONFIDENCE_LIMIT
+            self.failed_attempt_limit = VIP_FAILED_ATTEMPT_LIMIT
+        else:
+            self.min_confidence_threshold = min_confidence_threshold
+            self.immediate_escalation_threshold = immediate_escalation_threshold
+            self.rephrase_threshold_low = REPHRASE_THRESHOLD_LOW
+            self.rephrase_threshold_high = REPHRASE_THRESHOLD_HIGH
+            self.consecutive_low_confidence_limit = consecutive_low_confidence_limit
+            self.failed_attempt_limit = failed_attempt_limit
+
         self.message_similarity_threshold = message_similarity_threshold
+
+    def _is_vip_customer(self, customer_type: Optional[str]) -> bool:
+        """
+        Check if customer is VIP (gets preferential treatment).
+
+        Args:
+            customer_type: Customer type
+
+        Returns:
+            True if customer is VIP or enterprise
+        """
+        if not customer_type:
+            return False
+        return customer_type.lower() in [ct.lower() for ct in VIP_CUSTOMER_TYPES]
+
+    def get_agent_team(self) -> str:
+        """
+        Get the appropriate agent team for escalation routing.
+
+        Returns:
+            Agent team name based on customer type
+        """
+        if not self.customer_type:
+            return AGENT_TEAM_GENERAL
+
+        customer_type_lower = self.customer_type.lower()
+
+        if customer_type_lower == CUSTOMER_TYPE_ENTERPRISE:
+            return AGENT_TEAM_ENTERPRISE
+        elif customer_type_lower == CUSTOMER_TYPE_VIP:
+            return AGENT_TEAM_VIP
+        else:
+            return AGENT_TEAM_GENERAL
 
     def evaluate_confidence(
         self,
@@ -116,7 +190,7 @@ class EscalationEngine:
         # Use rephrase confidence if available
         effective_confidence = rephrase_confidence if rephrase_confidence is not None else confidence
 
-        # Check for immediate escalation (confidence < 0.60)
+        # Check for immediate escalation (confidence < threshold)
         if effective_confidence < self.immediate_escalation_threshold:
             logger.warning(f"Immediate escalation: confidence {effective_confidence:.2f} < {self.immediate_escalation_threshold}")
             return EscalationDecision(
@@ -127,9 +201,12 @@ class EscalationEngine:
                 rephrase_confidence=rephrase_confidence,
                 low_confidence_count=low_confidence_count + 1,
                 message="I'm not confident I can provide the best answer. Let me connect you with a human agent who can help better.",
+                is_vip=self.is_vip,
+                customer_type=self.customer_type,
+                escalation_payload={"agent_team": self.get_agent_team()},
             )
 
-        # Check for rephrase and escalate (0.60 ≤ confidence < 0.70)
+        # Check for rephrase and escalate (threshold_low ≤ confidence < min_threshold)
         if self.rephrase_threshold_low <= effective_confidence < self.min_confidence_threshold:
             if not rephrase_attempted:
                 # Try rephrase first
@@ -142,6 +219,8 @@ class EscalationEngine:
                     rephrase_confidence=None,
                     low_confidence_count=low_confidence_count + 1,
                     message="",
+                    is_vip=self.is_vip,
+                    customer_type=self.customer_type,
                 )
             else:
                 # Rephrase already attempted, escalate
@@ -154,6 +233,9 @@ class EscalationEngine:
                     rephrase_confidence=rephrase_confidence,
                     low_confidence_count=low_confidence_count + 1,
                     message="I've tried to rephrase my response but I'm still not confident. Let me connect you with a human agent.",
+                    is_vip=self.is_vip,
+                    customer_type=self.customer_type,
+                    escalation_payload={"agent_team": self.get_agent_team()},
                 )
 
         # Check for consecutive low-confidence
@@ -167,6 +249,9 @@ class EscalationEngine:
                 rephrase_confidence=rephrase_confidence,
                 low_confidence_count=low_confidence_count,
                 message="I've had difficulty providing confident answers on this topic. Let me connect you with a human agent.",
+                is_vip=self.is_vip,
+                customer_type=self.customer_type,
+                escalation_payload={"agent_team": self.get_agent_team()},
             )
 
         # Confidence is acceptable
@@ -179,6 +264,9 @@ class EscalationEngine:
             rephrase_confidence=rephrase_confidence,
             low_confidence_count=0,  # Reset count on success
             message="",
+            is_vip=self.is_vip,
+            customer_type=self.customer_type,
+            escalation_payload={"agent_team": self.get_agent_team()},
         )
 
     def should_rephrase(self, confidence: float) -> bool:
@@ -345,6 +433,9 @@ class EscalationEngine:
                 "failed_attempt_count": failed_attempt_count,
                 "attempt_reasons": attempt_reasons,
                 "limit_reached": True,
+                "is_vip": self.is_vip,
+                "customer_type": self.customer_type,
+                "agent_team": self.get_agent_team(),
             }
             return EscalationDecision(
                 should_escalate=True,
@@ -356,6 +447,8 @@ class EscalationEngine:
                 failed_attempt_count=failed_attempt_count,
                 message=f"I notice we've been going in circles. Let me connect you with a human agent who can help resolve this issue.",
                 escalation_payload=escalation_payload,
+                is_vip=self.is_vip,
+                customer_type=self.customer_type,
             )
 
         # Not yet at limit
@@ -372,7 +465,12 @@ class EscalationEngine:
                 "failed_attempt_count": failed_attempt_count,
                 "attempt_reasons": attempt_reasons,
                 "limit_reached": False,
+                "is_vip": self.is_vip,
+                "customer_type": self.customer_type,
+                "agent_team": self.get_agent_team(),
             },
+            is_vip=self.is_vip,
+            customer_type=self.customer_type,
         )
 
     def reset_failed_attempt_count(self) -> int:
@@ -384,3 +482,46 @@ class EscalationEngine:
         """
         logger.info("Resetting failed attempt count after successful resolution")
         return 0
+
+    def evaluate_negative_sentiment(
+        self,
+        sentiment: Optional[str],
+    ) -> Optional[EscalationDecision]:
+        """
+        Evaluate negative sentiment for VIP customers.
+
+        VIP customers get escalated for any negative sentiment.
+
+        Args:
+            sentiment: Sentiment value (negative, neutral, positive)
+
+        Returns:
+            Escalation decision if VIP and negative sentiment, None otherwise
+        """
+        if not self.is_vip:
+            return None
+
+        if sentiment and sentiment.lower() == "negative":
+            logger.warning(f"VIP customer with negative sentiment: {sentiment}")
+            escalation_payload = {
+                "sentiment": sentiment,
+                "is_vip": self.is_vip,
+                "customer_type": self.customer_type,
+                "reason": "negative_sentiment",
+                "agent_team": self.get_agent_team(),
+            }
+            return EscalationDecision(
+                should_escalate=True,
+                reason=EscalationReason.VIP_CUSTOMER,
+                confidence_score=0.0,  # Not applicable for sentiment-based escalation
+                rephrase_attempted=False,
+                rephrase_confidence=None,
+                low_confidence_count=0,
+                failed_attempt_count=0,
+                message="I notice you're experiencing some frustration. Let me connect you with our dedicated VIP support team right away.",
+                escalation_payload=escalation_payload,
+                is_vip=self.is_vip,
+                customer_type=self.customer_type,
+            )
+
+        return None
