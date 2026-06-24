@@ -1,5 +1,6 @@
 """Escalation engine for automatic escalation based on AI confidence."""
 
+import difflib
 import logging
 from datetime import UTC, datetime
 from enum import Enum
@@ -16,6 +17,10 @@ REPHRASE_THRESHOLD_LOW = 0.60
 REPHRASE_THRESHOLD_HIGH = 0.70
 CONSECUTIVE_LOW_CONFIDENCE_LIMIT = 2
 
+# Failed attempt thresholds
+FAILED_ATTEMPT_LIMIT = 3
+MESSAGE_SIMILARITY_THRESHOLD = 0.8  # 80% similarity threshold
+
 
 class EscalationReason(str, Enum):
     """Reason for escalation."""
@@ -23,6 +28,7 @@ class EscalationReason(str, Enum):
     LOW_CONFIDENCE = "low_confidence"
     CONSECUTIVE_LOW_CONFIDENCE = "consecutive_low_confidence"
     REPHRASE_FAILED = "rephrase_failed"
+    FAILED_ATTEMPTS = "failed_attempts"
     ANGRY_CUSTOMER = "angry_customer"
     HIGH_PRIORITY_CUSTOMER = "high_priority_customer"
     VIP_CUSTOMER = "vip_customer"
@@ -40,7 +46,9 @@ class EscalationDecision(BaseModel):
     rephrase_attempted: bool = Field(default=False, description="Whether rephrase was attempted")
     rephrase_confidence: Optional[float] = Field(default=None, description="Confidence after rephrase")
     low_confidence_count: int = Field(default=0, description="Count of consecutive low-confidence messages")
+    failed_attempt_count: int = Field(default=0, description="Count of failed attempts")
     message: str = Field(default="", description="Escalation message to user")
+    escalation_payload: dict = Field(default_factory=dict, description="Additional escalation payload data")
 
 
 class LowConfidenceQuery(BaseModel):
@@ -67,6 +75,8 @@ class EscalationEngine:
         min_confidence_threshold: float = MIN_CONFIDENCE_THRESHOLD,
         immediate_escalation_threshold: float = IMMEDIATE_ESCALATION_THRESHOLD,
         consecutive_low_confidence_limit: int = CONSECUTIVE_LOW_CONFIDENCE_LIMIT,
+        failed_attempt_limit: int = FAILED_ATTEMPT_LIMIT,
+        message_similarity_threshold: float = MESSAGE_SIMILARITY_THRESHOLD,
     ):
         """
         Initialize escalation engine.
@@ -75,10 +85,14 @@ class EscalationEngine:
             min_confidence_threshold: Minimum confidence threshold for AI response
             immediate_escalation_threshold: Threshold for immediate escalation
             consecutive_low_confidence_limit: Limit for consecutive low-confidence before escalation
+            failed_attempt_limit: Limit for failed attempts before escalation
+            message_similarity_threshold: Threshold for message similarity detection
         """
         self.min_confidence_threshold = min_confidence_threshold
         self.immediate_escalation_threshold = immediate_escalation_threshold
         self.consecutive_low_confidence_limit = consecutive_low_confidence_limit
+        self.failed_attempt_limit = failed_attempt_limit
+        self.message_similarity_threshold = message_similarity_threshold
 
     def evaluate_confidence(
         self,
@@ -244,4 +258,129 @@ class EscalationEngine:
         Returns:
             Reset count (0)
         """
+        return 0
+
+    def calculate_message_similarity(self, message1: str, message2: str) -> float:
+        """
+        Calculate similarity between two messages using sequence matching.
+
+        Args:
+            message1: First message
+            message2: Second message
+
+        Returns:
+            Similarity score between 0 and 1
+        """
+        if not message1 or not message2:
+            return 0.0
+
+        # Normalize messages (lowercase, strip whitespace)
+        msg1_normalized = message1.lower().strip()
+        msg2_normalized = message2.lower().strip()
+
+        # Use difflib's SequenceMatcher for similarity
+        similarity = difflib.SequenceMatcher(None, msg1_normalized, msg2_normalized).ratio()
+
+        return similarity
+
+    def is_failed_attempt(
+        self,
+        current_message: str,
+        previous_messages: list[str],
+        last_ai_response: Optional[str] = None,
+    ) -> tuple[bool, str]:
+        """
+        Determine if current message is a failed attempt (same/similar to previous message).
+
+        Args:
+            current_message: Current user message
+            previous_messages: List of previous messages
+            last_ai_response: Last AI response to user
+
+        Returns:
+            Tuple of (is_failed_attempt, reason)
+        """
+        if not previous_messages:
+            return False, ""
+
+        # Check similarity with most recent previous message
+        most_recent_message = previous_messages[-1]
+        similarity = self.calculate_message_similarity(current_message, most_recent_message)
+
+        if similarity >= self.message_similarity_threshold:
+            reason = f"Message similarity {similarity:.2f} >= threshold {self.message_similarity_threshold}"
+            logger.info(f"Failed attempt detected: {reason}")
+            return True, reason
+
+        # Check similarity with any previous message (last 5 messages)
+        for prev_msg in reversed(previous_messages[-5:]):
+            if prev_msg == most_recent_message:
+                continue  # Skip the most recent as we already checked it
+            similarity = self.calculate_message_similarity(current_message, prev_msg)
+            if similarity >= self.message_similarity_threshold:
+                reason = f"Message similarity {similarity:.2f} with earlier message >= threshold {self.message_similarity_threshold}"
+                logger.info(f"Failed attempt detected: {reason}")
+                return True, reason
+
+        return False, ""
+
+    def evaluate_failed_attempts(
+        self,
+        failed_attempt_count: int,
+        attempt_reasons: list[str],
+    ) -> EscalationDecision:
+        """
+        Evaluate failed attempts and make escalation decision.
+
+        Args:
+            failed_attempt_count: Count of failed attempts
+            attempt_reasons: List of reasons for failed attempts
+
+        Returns:
+            Escalation decision
+        """
+        if failed_attempt_count >= self.failed_attempt_limit:
+            logger.warning(f"Escalation due to failed attempts: {failed_attempt_count} >= {self.failed_attempt_limit}")
+            escalation_payload = {
+                "failed_attempt_count": failed_attempt_count,
+                "attempt_reasons": attempt_reasons,
+                "limit_reached": True,
+            }
+            return EscalationDecision(
+                should_escalate=True,
+                reason=EscalationReason.FAILED_ATTEMPTS,
+                confidence_score=0.0,  # Not applicable for failed attempts
+                rephrase_attempted=False,
+                rephrase_confidence=None,
+                low_confidence_count=0,
+                failed_attempt_count=failed_attempt_count,
+                message=f"I notice we've been going in circles. Let me connect you with a human agent who can help resolve this issue.",
+                escalation_payload=escalation_payload,
+            )
+
+        # Not yet at limit
+        return EscalationDecision(
+            should_escalate=False,
+            reason=None,
+            confidence_score=0.0,
+            rephrase_attempted=False,
+            rephrase_confidence=None,
+            low_confidence_count=0,
+            failed_attempt_count=failed_attempt_count,
+            message="",
+            escalation_payload={
+                "failed_attempt_count": failed_attempt_count,
+                "attempt_reasons": attempt_reasons,
+                "limit_reached": False,
+            },
+        )
+
+    def reset_failed_attempt_count(self) -> int:
+        """
+        Reset failed attempt count after successful resolution.
+
+        Returns:
+            Reset count (0)
+        """
+        logger.info("Resetting failed attempt count after successful resolution")
         return 0

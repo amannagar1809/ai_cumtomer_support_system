@@ -1394,6 +1394,8 @@ async def escalation_node(state: ConversationState) -> ConversationState:
     - Implements immediate escalation for confidence < 0.60
     - Implements rephrase and escalate for 0.60 ≤ confidence < 0.70
     - Tracks confidence per message, escalates on 2 consecutive low-confidence
+    - Tracks failed attempts (same/similar messages after AI response)
+    - Escalates after 3 failed attempts
     - Logs low-confidence queries for model improvement
 
     Args:
@@ -1418,25 +1420,60 @@ async def escalation_node(state: ConversationState) -> ConversationState:
         state.ai_confidence = confidence
         state.confidence_history.append(confidence)
 
-        # Evaluate confidence and make escalation decision
-        decision = escalation_engine.evaluate_confidence(
-            confidence=confidence,
-            low_confidence_count=state.low_confidence_count,
-            rephrase_attempted=state.rephrase_attempted,
-            rephrase_confidence=state.rephrase_confidence,
+        # Track failed attempts (same/similar message after AI response)
+        current_message = state.current_message if state.current_message else ""
+        is_failed_attempt, failed_attempt_reason = escalation_engine.is_failed_attempt(
+            current_message=current_message,
+            previous_messages=state.previous_messages,
+            last_ai_response=state.last_ai_response,
         )
 
-        # Update state with decision
-        state.should_escalate = decision.should_escalate
-        state.escalation_reason = decision.reason.value if decision.reason else None
-        state.low_confidence_count = decision.low_confidence_count
-
-        # Check if rephrase should be attempted
-        if not decision.should_escalate and escalation_engine.should_rephrase(confidence):
-            state.rephrase_attempted = True
-            logger.info(f"Rephrase recommended for confidence {confidence:.2f}")
+        if is_failed_attempt:
+            state.failed_attempt_count += 1
+            state.attempt_reasons.append(failed_attempt_reason)
+            logger.warning(f"Failed attempt detected: {failed_attempt_reason}, count: {state.failed_attempt_count}")
         else:
-            state.rephrase_attempted = False
+            # Reset counter if not a failed attempt (successful resolution)
+            if state.failed_attempt_count > 0:
+                state.failed_attempt_count = escalation_engine.reset_failed_attempt_count()
+                state.attempt_reasons = []
+                logger.info("Failed attempt count reset after successful resolution")
+
+        # Add current message to previous messages
+        state.previous_messages.append(current_message)
+
+        # Evaluate failed attempts and make escalation decision
+        failed_attempt_decision = escalation_engine.evaluate_failed_attempts(
+            failed_attempt_count=state.failed_attempt_count,
+            attempt_reasons=state.attempt_reasons,
+        )
+
+        # If failed attempts trigger escalation, use that decision
+        if failed_attempt_decision.should_escalate:
+            state.should_escalate = True
+            state.escalation_reason = failed_attempt_decision.reason.value if failed_attempt_decision.reason else None
+            state.escalation_payload = failed_attempt_decision.escalation_payload
+            logger.warning(f"Escalation triggered by failed attempts: {state.escalation_reason}")
+        else:
+            # Otherwise, evaluate confidence-based escalation
+            decision = escalation_engine.evaluate_confidence(
+                confidence=confidence,
+                low_confidence_count=state.low_confidence_count,
+                rephrase_attempted=state.rephrase_attempted,
+                rephrase_confidence=state.rephrase_confidence,
+            )
+
+            # Update state with decision
+            state.should_escalate = decision.should_escalate
+            state.escalation_reason = decision.reason.value if decision.reason else None
+            state.low_confidence_count = decision.low_confidence_count
+
+            # Check if rephrase should be attempted
+            if not decision.should_escalate and escalation_engine.should_rephrase(confidence):
+                state.rephrase_attempted = True
+                logger.info(f"Rephrase recommended for confidence {confidence:.2f}")
+            else:
+                state.rephrase_attempted = False
 
         # Log low-confidence queries for model improvement
         if confidence < escalation_engine.min_confidence_threshold:
@@ -1453,30 +1490,35 @@ async def escalation_node(state: ConversationState) -> ConversationState:
                 confidence_score=confidence,
                 rephrase_attempted=state.rephrase_attempted,
                 rephrase_confidence=state.rephrase_confidence,
-                escalated=decision.should_escalate,
+                escalated=state.should_escalate,
                 escalation_reason=state.escalation_reason,
                 context={
                     "intent": state.intent,
                     "sentiment": state.sentiment,
                     "customer_tier": state.customer_tier,
+                    "failed_attempt_count": state.failed_attempt_count,
                 },
             )
 
         # Record intermediate result
         state.intermediate_results["escalation"] = {
             "confidence": confidence,
-            "should_escalate": decision.should_escalate,
+            "should_escalate": state.should_escalate,
             "reason": state.escalation_reason,
             "low_confidence_count": state.low_confidence_count,
             "rephrase_attempted": state.rephrase_attempted,
             "confidence_history": state.confidence_history,
+            "failed_attempt_count": state.failed_attempt_count,
+            "attempt_reasons": state.attempt_reasons,
+            "escalation_payload": state.escalation_payload,
         }
 
         logger.info(
             f"Escalation evaluation - Confidence: {confidence:.2f}, "
-            f"Should Escalate: {decision.should_escalate}, "
+            f"Should Escalate: {state.should_escalate}, "
             f"Reason: {state.escalation_reason}, "
-            f"Low Confidence Count: {state.low_confidence_count}"
+            f"Low Confidence Count: {state.low_confidence_count}, "
+            f"Failed Attempt Count: {state.failed_attempt_count}"
         )
 
     except Exception as e:
