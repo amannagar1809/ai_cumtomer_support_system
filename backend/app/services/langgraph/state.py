@@ -170,6 +170,11 @@ class ConversationState(BaseModel):
     escalation_reason: Optional[str] = Field(default=None, description="Reason for escalation")
     escalation_payload: dict[str, Any] = Field(default_factory=dict, description="Additional escalation payload data")
 
+    # Handoff data for human agent
+    handoff_data: dict[str, Any] = Field(default_factory=dict, description="Handoff data package for human agent")
+    transfer_message: Optional[str] = Field(default=None, description="Transfer message to customer")
+    handoff_prepared: bool = Field(default=False, description="Whether handoff data has been prepared")
+
     # Final response
     final_response: Optional[str] = Field(default=None, description="Final response to return to user")
     response_metadata: dict[str, Any] = Field(

@@ -11,6 +11,7 @@ from app.services.langgraph.angry_customer_handler import AngryCustomerHandler
 from app.services.langgraph.context_manager import ContextManager
 from app.services.langgraph.customer_profile import CustomerProfileService
 from app.services.langgraph.escalation_engine import EscalationEngine, EscalationReason
+from app.services.langgraph.handoff import HandoffService
 from app.services.langgraph.intent_classifier import IntentClassifier
 from app.services.langgraph.message_processor import (
     calculate_queue_priority,
@@ -1538,6 +1539,26 @@ async def escalation_node(state: ConversationState) -> ConversationState:
             f"Customer Type: {customer_type}, "
             f"Is VIP: {escalation_engine.is_vip}"
         )
+
+        # Prepare handoff data if escalation is triggered
+        if state.should_escalate:
+            handoff_service = HandoffService()
+            
+            # Prepare handoff data
+            handoff_data = handoff_service.prepare_handoff(
+                conversation_id=str(state.conversation_id) if state.conversation_id else "unknown",
+                escalation_reason=state.escalation_reason,
+                state=state.model_dump(),
+            )
+            
+            # Update state with handoff data
+            state.handoff_data = handoff_data.model_dump()
+            state.handoff_prepared = True
+            
+            # Get transfer message for customer
+            state.transfer_message = handoff_service.get_transfer_message(is_vip=escalation_engine.is_vip)
+            
+            logger.info(f"Handoff data prepared for conversation {state.conversation_id}")
 
     except Exception as e:
         state.error = str(e)
