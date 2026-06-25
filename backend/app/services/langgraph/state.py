@@ -82,6 +82,15 @@ class ConversationState(BaseModel):
     language_detection_time_ms: Optional[float] = Field(default=None, description="Language detection latency in milliseconds")
     language_from_cache: bool = Field(default=False, description="Whether language was detected from cache")
 
+    # Translation result
+    original_message: Optional[str] = Field(default=None, description="Original message in customer's language")
+    translated_message: Optional[str] = Field(default=None, description="Message translated to English for AI processing")
+    original_response: Optional[str] = Field(default=None, description="Original AI response in English")
+    translated_response: Optional[str] = Field(default=None, description="Response translated to customer's language")
+    translation_success: bool = Field(default=True, description="Whether translation was successful")
+    translation_error: Optional[str] = Field(default=None, description="Translation error message if failed")
+    translation_time_ms: Optional[float] = Field(default=None, description="Translation latency in milliseconds")
+
     # Sentiment analysis result
     sentiment: Optional[str] = Field(default=None, description="Detected sentiment (positive/negative/neutral)")
     sentiment_score: Optional[float] = Field(default=None, description="Sentiment score (-1 to 1)")
