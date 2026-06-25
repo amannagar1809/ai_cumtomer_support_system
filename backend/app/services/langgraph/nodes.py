@@ -15,6 +15,7 @@ from app.services.langgraph.escalation_engine import EscalationEngine, Escalatio
 from app.services.langgraph.handoff import HandoffService
 from app.services.langgraph.intent_classifier import IntentClassifier
 from app.services.langgraph.language_detector import LanguageDetector
+from app.services.langgraph.translation_service import TranslationService
 from app.services.langgraph.message_processor import (
     calculate_queue_priority,
     check_duplicate_message,
@@ -159,7 +160,7 @@ async def receive_query_node(state: ConversationState) -> ConversationState:
 
 async def language_detection_node(state: ConversationState) -> ConversationState:
     """
-    Language Detection Node: Detects the language of the user message.
+    Language Detection Node: Detects the language of the user message and translates to English if needed.
 
     This node:
     - Detects language from message using fastText/cld3
@@ -168,12 +169,14 @@ async def language_detection_node(state: ConversationState) -> ConversationState
     - Uses 0.85 confidence threshold for acceptance
     - Falls back to English for low confidence or unsupported languages
     - Caches detection result per user (assumes same language for conversation)
+    - Translates non-English messages to English for AI processing
+    - Preserves original message for database storage
 
     Args:
         state: Current conversation state
 
     Returns:
-        Updated state with detected language
+        Updated state with detected language and translation
     """
     start_time = time.time()
     state.current_node = "language_detection"
@@ -195,6 +198,8 @@ async def language_detection_node(state: ConversationState) -> ConversationState
             state.language_is_fallback = True
             state.language_detection_time_ms = 0.0
             state.language_from_cache = False
+            state.original_message = message
+            state.translated_message = message
         else:
             # Detect language with caching
             user_id = str(state.user_id) if state.user_id else None
@@ -213,6 +218,38 @@ async def language_detection_node(state: ConversationState) -> ConversationState
             state.language_detection_time_ms = result.detection_time_ms
             state.language_from_cache = result.from_cache
 
+            # Store original message
+            state.original_message = message
+
+            # Translate to English if not already English
+            if state.detected_language != "en":
+                translator = TranslationService()
+                translation_result = translator.translate_to_english(
+                    text=message,
+                    source_language=state.detected_language,
+                )
+
+                if translation_result.success:
+                    state.translated_message = translation_result.translated_text
+                    state.translation_success = True
+                    state.translation_time_ms = translation_result.translation_time_ms
+                    logger.info(
+                        f"Message translated to English: {state.detected_language} -> en, "
+                        f"time: {translation_result.translation_time_ms:.2f}ms"
+                    )
+                else:
+                    # Translation failed, use original message
+                    state.translated_message = message
+                    state.translation_success = False
+                    state.translation_error = translation_result.error
+                    state.translation_time_ms = translation_result.translation_time_ms
+                    logger.warning(f"Translation failed: {translation_result.error}, using original message")
+            else:
+                # Already in English, no translation needed
+                state.translated_message = message
+                state.translation_success = True
+                state.translation_time_ms = 0.0
+
         # Record intermediate result
         state.intermediate_results["language_detection"] = {
             "detected_language": state.detected_language,
@@ -222,6 +259,10 @@ async def language_detection_node(state: ConversationState) -> ConversationState
             "is_fallback": state.language_is_fallback,
             "detection_time_ms": state.language_detection_time_ms,
             "from_cache": state.language_from_cache,
+            "original_message": state.original_message,
+            "translated_message": state.translated_message,
+            "translation_success": state.translation_success,
+            "translation_time_ms": state.translation_time_ms,
         }
 
         logger.info(
@@ -230,7 +271,8 @@ async def language_detection_node(state: ConversationState) -> ConversationState
             f"supported: {state.language_is_supported}, "
             f"fallback: {state.language_is_fallback}, "
             f"time: {state.language_detection_time_ms:.2f}ms, "
-            f"cached: {state.language_from_cache}"
+            f"cached: {state.language_from_cache}, "
+            f"translated: {state.translated_message != state.original_message}"
         )
 
     except Exception as e:
@@ -283,8 +325,9 @@ async def intent_detection_node(state: ConversationState) -> ConversationState:
             user_id=user_id,
         )
 
-        # Classify the intent
-        classification_result = classifier.classify(state.message)
+        # Classify the intent (use translated message if available for AI processing)
+        message_to_classify = state.translated_message if state.translated_message else state.message
+        classification_result = classifier.classify(message_to_classify)
 
         # Update state with classification results
         state.detected_intent = classification_result.intent
@@ -1990,8 +2033,8 @@ async def knowledge_search_node(state: ConversationState) -> ConversationState:
     state.execution_path.append("knowledge_search")
 
     try:
-        # Construct search query
-        search_query = state.message
+        # Construct search query (use translated message if available for AI processing)
+        search_query = state.translated_message if state.translated_message else state.message
         if state.detected_intent:
             search_query = f"{state.detected_intent}: {search_query}"
 
@@ -2068,6 +2111,7 @@ async def response_generation_node(state: ConversationState) -> ConversationStat
         if state.search_results:
             generated_response += " I found some relevant information that might help."
 
+        # Note: The response is generated in English, will be translated back in return_response_node
         state.generated_response = generated_response
         state.response_source = "ai" if not state.search_results else "knowledge"
 
@@ -2075,9 +2119,10 @@ async def response_generation_node(state: ConversationState) -> ConversationStat
         state.intermediate_results["response_generation"] = {
             "generated_response": generated_response,
             "source": state.response_source,
+            "generated_in_english": True,
         }
 
-        logger.info(f"Generated response: {generated_response[:50]}...")
+        logger.info(f"Generated response in English: {generated_response[:50]}...")
 
     except Exception as e:
         state.error = str(e)
@@ -2112,7 +2157,8 @@ async def sentiment_analysis_node(state: ConversationState) -> ConversationState
     state.execution_path.append("sentiment_analysis")
 
     try:
-        message = state.message.lower()
+        # Use translated message for sentiment analysis (English for AI processing)
+        message = (state.translated_message if state.translated_message else state.message).lower()
 
         # Simple sentiment analysis (in production, use a proper sentiment analyzer)
         positive_words = ["good", "great", "excellent", "happy", "love", "thanks", "thank"]
@@ -2138,6 +2184,7 @@ async def sentiment_analysis_node(state: ConversationState) -> ConversationState
         state.intermediate_results["sentiment_analysis"] = {
             "sentiment": sentiment,
             "score": score,
+            "analyzed_message": state.translated_message if state.translated_message else state.message,
         }
 
         logger.info(f"Sentiment analysis: {sentiment} (score: {score})")
@@ -2217,11 +2264,13 @@ async def escalation_decision_node(state: ConversationState) -> ConversationStat
 
 async def return_response_node(state: ConversationState) -> ConversationState:
     """
-    Return Response Node: Finalizes and returns the response.
+    Return Response Node: Finalizes and returns the response with translation if needed.
 
     This node:
     - Selects appropriate response
     - Adds escalation message if needed
+    - Translates response back to customer's language if not English
+    - Handles translation failures with apology
     - Returns final response
 
     Args:
@@ -2235,26 +2284,80 @@ async def return_response_node(state: ConversationState) -> ConversationState:
     state.execution_path.append("return_response")
 
     try:
-        # Determine final response
+        # Determine final response in English
         if state.should_escalate:
-            final_response = (
-                f"{state.generated_response}\n\n"
-                "I'm escalating this to a human agent who will be able to assist you better."
-            )
+            # Use transfer message if available
+            if state.transfer_message:
+                english_response = state.transfer_message
+            else:
+                english_response = (
+                    f"{state.generated_response}\n\n"
+                    "I'm escalating this to a human agent who will be able to assist you better."
+                )
             state.response_metadata["escalated"] = True
         else:
-            final_response = state.generated_response
+            english_response = state.generated_response
             state.response_metadata["escalated"] = False
+
+        # Store original English response
+        state.original_response = english_response
+
+        # Translate response back to customer's language if not English
+        if state.detected_language and state.detected_language != "en":
+            translator = TranslationService()
+            translation_result = translator.translate_from_english(
+                text=english_response,
+                target_language=state.detected_language,
+            )
+
+            if translation_result.success:
+                state.translated_response = translation_result.translated_text
+                state.translation_success = True
+                state.translation_time_ms = translation_result.translation_time_ms
+                final_response = state.translated_response
+                logger.info(
+                    f"Response translated to {state.language_name}: en -> {state.detected_language}, "
+                    f"time: {translation_result.translation_time_ms:.2f}ms"
+                )
+            else:
+                # Translation failed, use apology + English response
+                state.translated_response = translator.handle_translation_failure(
+                    original_response=english_response,
+                    customer_language=state.detected_language,
+                )
+                state.translation_success = False
+                state.translation_error = translation_result.error
+                state.translation_time_ms = translation_result.translation_time_ms
+                final_response = state.translated_response
+                logger.warning(
+                    f"Response translation failed: {translation_result.error}, "
+                    f"using apology + English response"
+                )
+        else:
+            # Already in English, no translation needed
+            state.translated_response = english_response
+            state.translation_success = True
+            state.translation_time_ms = 0.0
+            final_response = english_response
 
         state.final_response = final_response
 
         # Record intermediate result
         state.intermediate_results["return_response"] = {
             "final_response": final_response,
+            "original_response": state.original_response,
+            "translated_response": state.translated_response,
             "escalated": state.should_escalate,
+            "translation_success": state.translation_success,
+            "translation_time_ms": state.translation_time_ms,
+            "customer_language": state.detected_language,
         }
 
-        logger.info(f"Final response: {final_response[:50]}...")
+        logger.info(
+            f"Final response: {final_response[:50]}..., "
+            f"translated: {state.translated_response != state.original_response}, "
+            f"language: {state.detected_language}"
+        )
 
     except Exception as e:
         state.error = str(e)
