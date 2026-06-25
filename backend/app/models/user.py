@@ -59,6 +59,15 @@ class User(Base):
     language: Mapped[str] = mapped_column(
         String(10), nullable=False, server_default="en"
     )
+    preferred_language: Mapped[str | None] = mapped_column(
+        String(10), nullable=True
+    )
+    language_preference_source: Mapped[str | None] = mapped_column(
+        String(20), nullable=True
+    )  # 'manual', 'auto', 'detected'
+    language_preference_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=False), nullable=True
+    )
     customer_type: Mapped[CustomerType] = mapped_column(
         Enum(
             CustomerType,
