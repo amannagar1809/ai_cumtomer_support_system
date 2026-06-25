@@ -73,6 +73,15 @@ class ConversationState(BaseModel):
     generated_response: Optional[str] = Field(default=None, description="Generated response")
     response_source: Optional[str] = Field(default=None, description="Source of response (AI/knowledge)")
 
+    # Language detection result
+    detected_language: Optional[str] = Field(default=None, description="Detected language code (e.g., 'en', 'hi')")
+    language_name: Optional[str] = Field(default=None, description="Full language name (e.g., 'English', 'Hindi')")
+    language_confidence: float = Field(default=0.0, description="Language detection confidence score (0.0 to 1.0)")
+    language_is_supported: bool = Field(default=True, description="Whether detected language is supported")
+    language_is_fallback: bool = Field(default=False, description="Whether fallback to English was used")
+    language_detection_time_ms: Optional[float] = Field(default=None, description="Language detection latency in milliseconds")
+    language_from_cache: bool = Field(default=False, description="Whether language was detected from cache")
+
     # Sentiment analysis result
     sentiment: Optional[str] = Field(default=None, description="Detected sentiment (positive/negative/neutral)")
     sentiment_score: Optional[float] = Field(default=None, description="Sentiment score (-1 to 1)")

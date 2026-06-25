@@ -14,6 +14,7 @@ from app.services.langgraph.customer_profile import CustomerProfileService
 from app.services.langgraph.escalation_engine import EscalationEngine, EscalationReason
 from app.services.langgraph.handoff import HandoffService
 from app.services.langgraph.intent_classifier import IntentClassifier
+from app.services.langgraph.language_detector import LanguageDetector
 from app.services.langgraph.message_processor import (
     calculate_queue_priority,
     check_duplicate_message,
@@ -161,9 +162,12 @@ async def language_detection_node(state: ConversationState) -> ConversationState
     Language Detection Node: Detects the language of the user message.
 
     This node:
-    - Detects language from message
-    - Returns language code and confidence
-    - Handles edge cases (empty messages, unknown languages)
+    - Detects language from message using fastText/cld3
+    - Supports English, Hindi, Spanish, French, Arabic, German
+    - Detects language within 100ms performance target
+    - Uses 0.85 confidence threshold for acceptance
+    - Falls back to English for low confidence or unsupported languages
+    - Caches detection result per user (assumes same language for conversation)
 
     Args:
         state: Current conversation state
@@ -176,35 +180,58 @@ async def language_detection_node(state: ConversationState) -> ConversationState
     state.execution_path.append("language_detection")
 
     try:
-        # Simple language detection (in production, use a proper library like langdetect)
-        # For now, we'll use a simple heuristic
-        message = state.message.lower()
+        # Initialize language detector
+        detector = LanguageDetector()
 
-        # Simple language detection based on common words
-        if any(word in message for word in ["hello", "hi", "help", "please", "thank"]):
-            detected_lang = "en"
-            confidence = 0.9
-        elif any(word in message for word in ["hola", "gracias", "por favor"]):
-            detected_lang = "es"
-            confidence = 0.85
-        elif any(word in message for word in ["bonjour", "merci", "s'il vous plaît"]):
-            detected_lang = "fr"
-            confidence = 0.85
+        # Get message text
+        message = state.current_message if state.current_message else state.message
+
+        if not message:
+            logger.warning("No message provided for language detection")
+            state.detected_language = "en"
+            state.language_name = "English"
+            state.language_confidence = 0.0
+            state.language_is_supported = True
+            state.language_is_fallback = True
+            state.language_detection_time_ms = 0.0
+            state.language_from_cache = False
         else:
-            # Default to English
-            detected_lang = "en"
-            confidence = 0.5
+            # Detect language with caching
+            user_id = str(state.user_id) if state.user_id else None
+            result = detector.detect_language(
+                text=message,
+                user_id=user_id,
+                use_cache=True,
+            )
 
-        state.detected_language = detected_lang
-        state.language_confidence = confidence
+            # Update state with detection result
+            state.detected_language = result.detected_language
+            state.language_name = result.language_name
+            state.language_confidence = result.confidence
+            state.language_is_supported = result.is_supported
+            state.language_is_fallback = result.is_fallback
+            state.language_detection_time_ms = result.detection_time_ms
+            state.language_from_cache = result.from_cache
 
         # Record intermediate result
         state.intermediate_results["language_detection"] = {
-            "detected_language": detected_lang,
-            "confidence": confidence,
+            "detected_language": state.detected_language,
+            "language_name": state.language_name,
+            "confidence": state.language_confidence,
+            "is_supported": state.language_is_supported,
+            "is_fallback": state.language_is_fallback,
+            "detection_time_ms": state.language_detection_time_ms,
+            "from_cache": state.language_from_cache,
         }
 
-        logger.info(f"Detected language: {detected_lang} (confidence: {confidence})")
+        logger.info(
+            f"Language detection: {state.language_name} ({state.detected_language}), "
+            f"confidence: {state.language_confidence:.2f}, "
+            f"supported: {state.language_is_supported}, "
+            f"fallback: {state.language_is_fallback}, "
+            f"time: {state.language_detection_time_ms:.2f}ms, "
+            f"cached: {state.language_from_cache}"
+        )
 
     except Exception as e:
         state.error = str(e)
