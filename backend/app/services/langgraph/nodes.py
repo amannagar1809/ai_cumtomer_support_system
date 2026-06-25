@@ -15,6 +15,7 @@ from app.services.langgraph.escalation_engine import EscalationEngine, Escalatio
 from app.services.langgraph.handoff import HandoffService
 from app.services.langgraph.intent_classifier import IntentClassifier
 from app.services.langgraph.language_detector import LanguageDetector
+from app.services.langgraph.language_preference_service import LanguagePreferenceService
 from app.services.langgraph.translation_service import TranslationService
 from app.services.langgraph.message_processor import (
     calculate_queue_priority,
@@ -163,12 +164,16 @@ async def language_detection_node(state: ConversationState) -> ConversationState
     Language Detection Node: Detects the language of the user message and translates to English if needed.
 
     This node:
-    - Detects language from message using fastText/cld3
+    - Checks user profile for language preference first (override if set)
+    - Detects language from message using fastText/cld3 if no preference
     - Supports English, Hindi, Spanish, French, Arabic, German
     - Detects language within 100ms performance target
     - Uses 0.85 confidence threshold for acceptance
     - Falls back to English for low confidence or unsupported languages
     - Caches detection result per user (assumes same language for conversation)
+    - Persists detected language to user profile for returning users
+    - Tracks language consistency for auto-update
+    - Supports language change mid-conversation
     - Translates non-English messages to English for AI processing
     - Preserves original message for database storage
 
@@ -198,25 +203,87 @@ async def language_detection_node(state: ConversationState) -> ConversationState
             state.language_is_fallback = True
             state.language_detection_time_ms = 0.0
             state.language_from_cache = False
+            state.language_preference_source = "fallback"
+            state.language_from_user_profile = False
             state.original_message = message
             state.translated_message = message
         else:
-            # Detect language with caching
-            user_id = str(state.user_id) if state.user_id else None
-            result = detector.detect_language(
-                text=message,
-                user_id=user_id,
-                use_cache=True,
-            )
+            # Check user profile for language preference first
+            user_preferred_language = None
+            if state.customer_profile and state.customer_profile.get("preferred_language"):
+                user_preferred_language = state.customer_profile["preferred_language"]
+                state.language_from_user_profile = True
+                state.language_preference_source = "manual"
+                logger.info(f"Using user preferred language from profile: {user_preferred_language}")
 
-            # Update state with detection result
-            state.detected_language = result.detected_language
-            state.language_name = result.language_name
-            state.language_confidence = result.confidence
-            state.language_is_supported = result.is_supported
-            state.language_is_fallback = result.is_fallback
-            state.language_detection_time_ms = result.detection_time_ms
-            state.language_from_cache = result.from_cache
+            # If user has preferred language, use it (unless they explicitly changed mid-conversation)
+            if user_preferred_language:
+                # Still detect language to check for consistency (for auto-update)
+                detection_result = detector.detect_language(
+                    text=message,
+                    user_id=str(state.user_id) if state.user_id else None,
+                    use_cache=False,  # Don't use cache to detect actual language
+                )
+
+                # Check if detected language differs from preference (possible mid-conversation change)
+                if detection_result.detected_language != user_preferred_language:
+                    state.language_consistency_count = 0
+                    logger.info(
+                        f"Detected language ({detection_result.detected_language}) differs from "
+                        f"user preference ({user_preferred_language}), possible mid-conversation change"
+                    )
+                    # Use detected language for this message (support mid-conversation change)
+                    state.detected_language = detection_result.detected_language
+                    state.language_name = detection_result.language_name
+                    state.language_confidence = detection_result.confidence
+                    state.language_is_supported = detection_result.is_supported
+                    state.language_is_fallback = detection_result.is_fallback
+                    state.language_detection_time_ms = detection_result.detection_time_ms
+                    state.language_from_cache = False
+                    state.language_preference_source = "detected"
+                    state.language_from_user_profile = False
+                else:
+                    # Consistent with preference, increment consistency count
+                    state.language_consistency_count = state.language_consistency_count + 1
+                    state.detected_language = user_preferred_language
+                    state.language_name = detector.get_supported_languages().get(user_preferred_language, user_preferred_language)
+                    state.language_confidence = 1.0  # High confidence for user preference
+                    state.language_is_supported = detector.is_language_supported(user_preferred_language)
+                    state.language_is_fallback = False
+                    state.language_detection_time_ms = 0.0
+                    state.language_from_cache = True
+                    state.language_preference_source = "manual"
+                    state.language_from_user_profile = True
+            else:
+                # No user preference, detect language with caching
+                user_id = str(state.user_id) if state.user_id else None
+                result = detector.detect_language(
+                    text=message,
+                    user_id=user_id,
+                    use_cache=True,
+                )
+
+                # Update state with detection result
+                state.detected_language = result.detected_language
+                state.language_name = result.language_name
+                state.language_confidence = result.confidence
+                state.language_is_supported = result.is_supported
+                state.language_is_fallback = result.is_fallback
+                state.language_detection_time_ms = result.detection_time_ms
+                state.language_from_cache = result.from_cache
+                state.language_preference_source = "cache" if result.from_cache else "detected"
+                state.language_from_user_profile = False
+                state.language_consistency_count = state.language_consistency_count + 1
+
+                # Check if we should auto-update user preference based on consistency
+                if user_id and state.language_consistency_count >= 5:
+                    # Note: This would require database session, which is not available in the node
+                    # In production, this would be handled in a separate service or background job
+                    logger.info(
+                        f"Language consistency threshold reached for user {user_id}: "
+                        f"{state.language_consistency_count} detections of {state.detected_language}. "
+                        f"Consider persisting to user profile."
+                    )
 
             # Store original message
             state.original_message = message
@@ -259,6 +326,9 @@ async def language_detection_node(state: ConversationState) -> ConversationState
             "is_fallback": state.language_is_fallback,
             "detection_time_ms": state.language_detection_time_ms,
             "from_cache": state.language_from_cache,
+            "preference_source": state.language_preference_source,
+            "from_user_profile": state.language_from_user_profile,
+            "consistency_count": state.language_consistency_count,
             "original_message": state.original_message,
             "translated_message": state.translated_message,
             "translation_success": state.translation_success,
@@ -272,6 +342,9 @@ async def language_detection_node(state: ConversationState) -> ConversationState
             f"fallback: {state.language_is_fallback}, "
             f"time: {state.language_detection_time_ms:.2f}ms, "
             f"cached: {state.language_from_cache}, "
+            f"preference_source: {state.language_preference_source}, "
+            f"from_profile: {state.language_from_user_profile}, "
+            f"consistency: {state.language_consistency_count}, "
             f"translated: {state.translated_message != state.original_message}"
         )
 

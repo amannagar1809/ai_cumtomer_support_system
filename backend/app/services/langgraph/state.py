@@ -81,6 +81,9 @@ class ConversationState(BaseModel):
     language_is_fallback: bool = Field(default=False, description="Whether fallback to English was used")
     language_detection_time_ms: Optional[float] = Field(default=None, description="Language detection latency in milliseconds")
     language_from_cache: bool = Field(default=False, description="Whether language was detected from cache")
+    language_preference_source: Optional[str] = Field(default=None, description="Source of language preference (manual, auto, detected, cache)")
+    language_from_user_profile: bool = Field(default=False, description="Whether language came from user profile preference")
+    language_consistency_count: int = Field(default=0, description="Count of consistent language detections for auto-update")
 
     # Translation result
     original_message: Optional[str] = Field(default=None, description="Original message in customer's language")
