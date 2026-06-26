@@ -4,15 +4,24 @@ import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.models.user import User
 from app.schemas.voice import (
+    AvailableVoicesResponse,
+    SetVoicePreferenceRequest,
+    SynthesizeRequest,
+    SynthesizeResponse,
     TranscribeAudioRequest,
     TranscribeAudioResponse,
     UploadAudioResponse,
+    VoiceConfig,
+    VoicePreferenceResponse,
 )
 from app.services.voice.stt_service import STTService, STTProvider
+from app.services.voice.tts_service import TTSService, TTSProvider
 
 router = APIRouter(prefix="/voice", tags=["voice"])
 
@@ -190,3 +199,213 @@ async def get_transcription(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
         detail="Transcription lookup not yet implemented",
     )
+
+
+@router.post(
+    "/synthesize",
+    response_model=SynthesizeResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Synthesize text to speech",
+)
+async def synthesize_speech(
+    body: SynthesizeRequest,
+    db: AsyncSession = Depends(get_db),
+) -> SynthesizeResponse:
+    """
+    Synthesize text to audio.
+
+    Args:
+        body: Synthesis request with text and voice options
+        db: Database session
+
+    Returns:
+        Synthesized audio with metadata
+    """
+    try:
+        # Initialize TTS service (using ElevenLabs as default)
+        tts_service = TTSService(provider=TTSProvider.elevenlabs)
+
+        # Synthesize audio
+        result = tts_service.synthesize(
+            text=body.text,
+            voice_id=body.voice_id,
+            language=body.language,
+            use_ssml=body.use_ssml,
+            use_streaming=body.use_streaming,
+        )
+
+        # Convert audio to base64
+        audio_base64 = tts_service.synthesize_to_base64(
+            text=body.text,
+            voice_id=body.voice_id,
+            language=body.language,
+            use_ssml=body.use_ssml,
+        )
+
+        return SynthesizeResponse(
+            audio_data=audio_base64,
+            audio_format=result.audio_format,
+            duration=result.duration,
+            voice_id=result.voice_id,
+            provider=result.provider,
+            processing_time_ms=result.processing_time_ms,
+            is_streamed=result.is_streamed,
+            from_cache=result.from_cache,
+            used_ssml=result.used_ssml,
+        )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Speech synthesis failed: {str(e)}",
+        )
+
+
+@router.post(
+    "/voice/preference",
+    response_model=VoicePreferenceResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Set user's voice preference",
+)
+async def set_voice_preference(
+    body: SetVoicePreferenceRequest,
+    db: AsyncSession = Depends(get_db),
+) -> VoicePreferenceResponse:
+    """
+    Set user's preferred voice for TTS.
+
+    Args:
+        body: Voice preference request
+        db: Database session
+
+    Returns:
+        Updated voice preference
+    """
+    try:
+        # Update user's voice preference
+        result = await db.execute(
+            select(User).where(User.id == body.user_id)
+        )
+        user = result.scalar_one_or_none()
+
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found",
+            )
+
+        user.preferred_voice_id = body.voice_id
+        user.voice_gender = body.gender
+        user.voice_style = body.style
+
+        await db.commit()
+        await db.refresh(user)
+
+        return VoicePreferenceResponse(
+            user_id=str(user.id),
+            voice_id=user.preferred_voice_id,
+            gender=user.voice_gender,
+            style=user.voice_style,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to set voice preference: {str(e)}",
+        )
+
+
+@router.get(
+    "/voice/preference/{user_id}",
+    response_model=VoicePreferenceResponse,
+    summary="Get user's voice preference",
+)
+async def get_voice_preference(
+    user_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> VoicePreferenceResponse:
+    """
+    Get user's preferred voice for TTS.
+
+    Args:
+        user_id: User ID
+        db: Database session
+
+    Returns:
+        User's voice preference
+    """
+    try:
+        result = await db.execute(
+            select(User).where(User.id == user_id)
+        )
+        user = result.scalar_one_or_none()
+
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found",
+            )
+
+        return VoicePreferenceResponse(
+            user_id=str(user.id),
+            voice_id=user.preferred_voice_id,
+            gender=user.voice_gender,
+            style=user.voice_style,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get voice preference: {str(e)}",
+        )
+
+
+@router.get(
+    "/voices",
+    response_model=AvailableVoicesResponse,
+    summary="Get available voices",
+)
+async def get_available_voices(
+    language: str = "en",
+    provider: str = "elevenlabs",
+    db: AsyncSession = Depends(get_db),
+) -> AvailableVoicesResponse:
+    """
+    Get available voices for a language and provider.
+
+    Args:
+        language: Language code (e.g., 'en', 'hi')
+        provider: TTS provider (elevenlabs, azure, amazon)
+        db: Database session
+
+    Returns:
+        List of available voices
+    """
+    try:
+        tts_service = TTSService(provider=TTSProvider(provider))
+        voices = tts_service.get_available_voices(language=language, provider=provider)
+
+        # Convert to schema
+        voice_configs = [
+            VoiceConfig(
+                voice_id=voice.voice_id,
+                name=voice.name,
+                language=voice.language,
+                gender=voice.gender,
+                style=voice.style,
+            )
+            for voice in voices
+        ]
+
+        return AvailableVoicesResponse(voices=voice_configs)
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get available voices: {str(e)}",
+        )
