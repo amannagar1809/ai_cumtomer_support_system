@@ -21,33 +21,37 @@ router = APIRouter(prefix="/voice", tags=["voice"])
     "/transcribe",
     response_model=TranscribeAudioResponse,
     status_code=status.HTTP_200_OK,
-    summary="Transcribe audio to text",
+    summary="Transcribe audio to text with latency optimization",
 )
 async def transcribe_audio(
     body: TranscribeAudioRequest,
     db: AsyncSession = Depends(get_db),
 ) -> TranscribeAudioResponse:
     """
-    Transcribe base64-encoded audio to text.
+    Transcribe base64-encoded audio to text with latency optimization.
 
     Args:
-        body: Transcription request with base64 audio
+        body: Transcription request with base64 audio and optimization options
         db: Database session
 
     Returns:
-        Transcription result with confidence score
+        Transcription result with confidence score and latency metrics
     """
     try:
-        # Initialize STT service (using Whisper as default)
-        stt_service = STTService(provider=STTProvider.whisper)
+        # Initialize STT service with regional endpoint selection
+        stt_service = STTService(
+            provider=STTProvider.whisper,
+            user_region=body.user_region,
+        )
 
-        # Transcribe audio
+        # Transcribe audio with latency optimizations
         result = stt_service.transcribe_base64(
             base64_audio=body.audio_data,
             audio_format=body.audio_format,
             use_streaming=body.use_streaming,
             apply_noise_reduction=body.apply_noise_reduction,
             detect_speakers=body.detect_speakers,
+            use_chunked=body.use_chunked,
         )
 
         # Check if fallback should be used
@@ -65,6 +69,10 @@ async def transcribe_audio(
             processing_time_ms=result.processing_time_ms,
             is_streaming=result.is_streaming,
             noise_reduced=result.noise_reduced,
+            is_chunked=result.is_chunked,
+            from_cache=result.from_cache,
+            regional_endpoint=result.regional_endpoint,
+            latency_target_met=result.latency_target_met,
             is_fallback=is_fallback,
         )
 
