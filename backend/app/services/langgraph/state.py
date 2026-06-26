@@ -226,6 +226,20 @@ class ConversationState(BaseModel):
     checkpoint_id: Optional[str] = Field(default=None, description="Checkpoint ID for resumption")
     can_resume: bool = Field(default=False, description="Whether execution can be resumed from checkpoint")
 
+    # Voice flow data
+    audio_input_data: Optional[bytes] = Field(default=None, description="Original audio input data")
+    audio_input_format: Optional[str] = Field(default=None, description="Audio input format (mp3, wav, ogg, m4a)")
+    audio_input_duration: Optional[float] = Field(default=None, description="Audio input duration in seconds")
+    transcription_result: Optional[str] = Field(default=None, description="Transcribed text from audio input")
+    transcription_confidence: Optional[float] = Field(default=None, description="Transcription confidence score")
+    audio_output_data: Optional[bytes] = Field(default=None, description="Generated audio output data")
+    audio_output_format: Optional[str] = Field(default=None, description="Audio output format (mp3)")
+    audio_output_duration: Optional[float] = Field(default=None, description="Audio output duration in seconds")
+    voice_id_used: Optional[str] = Field(default=None, description="Voice ID used for TTS")
+    stt_provider: Optional[str] = Field(default=None, description="STT provider used")
+    tts_provider: Optional[str] = Field(default=None, description="TTS provider used")
+    is_voice_flow: bool = Field(default=False, description="Whether this is a voice flow conversation")
+
     class Config:
         """Pydantic configuration."""
 

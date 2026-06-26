@@ -1,5 +1,6 @@
 """Voice bot API endpoints."""
 
+import base64
 import uuid
 from typing import Optional
 
@@ -18,6 +19,8 @@ from app.schemas.voice import (
     TranscribeAudioResponse,
     UploadAudioResponse,
     VoiceConfig,
+    VoiceFlowRequest,
+    VoiceFlowResponse,
     VoicePreferenceResponse,
 )
 from app.services.voice.stt_service import STTService, STTProvider
@@ -408,4 +411,113 @@ async def get_available_voices(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get available voices: {str(e)}",
+        )
+
+
+@router.post(
+    "/flow",
+    response_model=VoiceFlowResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Voice flow: STT → LangGraph → TTS",
+)
+async def voice_flow(
+    body: VoiceFlowRequest,
+    db: AsyncSession = Depends(get_db),
+) -> VoiceFlowResponse:
+    """
+    Process voice input through the complete voice flow.
+
+    This endpoint:
+    1. Transcribes audio input to text (STT)
+    2. Passes transcribed text through LangGraph
+    3. Converts text response to audio (TTS)
+    4. Returns audio output to client
+
+    Args:
+        body: Voice flow request with audio data
+        db: Database session
+
+    Returns:
+        Voice flow response with audio output
+    """
+    import time
+    from uuid import UUID
+
+    try:
+        start_time = time.time()
+
+        # Decode audio data
+        audio_data = base64.b64decode(body.audio_data)
+
+        # Get customer profile if user_id provided
+        customer_profile = {}
+        if body.user_id:
+            try:
+                result = await db.execute(
+                    select(User).where(User.id == UUID(body.user_id))
+                )
+                user = result.scalar_one_or_none()
+                if user:
+                    customer_profile = {
+                        "preferred_voice_id": user.preferred_voice_id,
+                        "voice_gender": user.voice_gender,
+                        "voice_style": user.voice_style,
+                        "preferred_language": user.preferred_language,
+                    }
+            except Exception as e:
+                logger.warning(f"Failed to get user profile: {e}")
+
+        # Initialize STT service
+        stt_service = STTService(provider=STTProvider.whisper)
+
+        # Step 1: STT - Transcribe audio to text
+        transcription_result = stt_service.transcribe(
+            audio_data=audio_data,
+            audio_format=body.audio_format,
+            use_chunked=True,
+            apply_noise_reduction=True,
+        )
+
+        # Step 2: LangGraph - Process transcribed text
+        # For now, use a simple placeholder response
+        # In production, this would call the actual LangGraph flow
+        text_response = f"I heard you say: {transcription_result.text}. This is a placeholder response from the AI."
+
+        # Step 3: TTS - Convert text response to audio
+        tts_service = TTSService(provider=TTSProvider.elevenlabs)
+
+        # Get voice preference
+        voice_id = customer_profile.get("preferred_voice_id")
+        language = customer_profile.get("preferred_language") or "en"
+
+        tts_result = tts_service.synthesize(
+            text=text_response,
+            voice_id=voice_id,
+            language=language,
+            use_ssml=True,
+        )
+
+        # Convert audio to base64
+        audio_output_base64 = base64.b64encode(tts_result.audio_data).decode("utf-8")
+
+        total_time_ms = (time.time() - start_time) * 1000
+
+        return VoiceFlowResponse(
+            transcription=transcription_result.text,
+            transcription_confidence=transcription_result.confidence,
+            text_response=text_response,
+            audio_output=audio_output_base64,
+            audio_format=tts_result.audio_format,
+            audio_duration=tts_result.duration,
+            voice_id=tts_result.voice_id,
+            stt_provider=transcription_result.provider,
+            tts_provider=tts_result.provider,
+            processing_time_ms=total_time_ms,
+        )
+
+    except Exception as e:
+        logger.exception(f"Voice flow failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Voice flow failed: {str(e)}",
         )
