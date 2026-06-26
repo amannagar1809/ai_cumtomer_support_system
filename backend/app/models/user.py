@@ -68,6 +68,18 @@ class User(Base):
     language_preference_updated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=False), nullable=True
     )
+    preferred_voice_id: Mapped[str | None] = mapped_column(
+        String(100), nullable=True
+    )  # Voice ID for TTS
+    voice_gender: Mapped[str | None] = mapped_column(
+        String(10), nullable=True
+    )  # 'male' or 'female'
+    voice_style: Mapped[str | None] = mapped_column(
+        String(20), nullable=True
+    )  # 'casual' or 'professional'
+    voice_preference_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=False), nullable=True
+    )
     customer_type: Mapped[CustomerType] = mapped_column(
         Enum(
             CustomerType,
