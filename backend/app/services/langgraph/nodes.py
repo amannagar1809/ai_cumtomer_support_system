@@ -11,6 +11,7 @@ from app.services.crm.crm_connector import CRMConnector
 from app.services.langgraph.angry_customer_handler import AngryCustomerHandler
 from app.services.langgraph.context_manager import ContextManager
 from app.services.langgraph.customer_profile import CustomerProfileService
+from app.services.knowledge_base.language_aware_search import LanguageAwareKnowledgeSearch
 from app.services.langgraph.escalation_engine import EscalationEngine, EscalationReason
 from app.services.langgraph.handoff import HandoffService
 from app.services.langgraph.intent_classifier import IntentClassifier
@@ -2088,11 +2089,13 @@ async def crm_integration_node(state: ConversationState) -> ConversationState:
 
 async def knowledge_search_node(state: ConversationState) -> ConversationState:
     """
-    Knowledge Search Node: Searches the knowledge base for relevant information.
+    Knowledge Search Node: Searches the knowledge base for relevant information with language awareness.
 
     This node:
     - Constructs search query from message and intent
-    - Searches knowledge base
+    - Searches knowledge base in user's language
+    - Falls back to English with translation note if no results in user's language
+    - Prioritizes native language content in response
     - Returns relevant documents/answers
 
     Args:
@@ -2113,24 +2116,47 @@ async def knowledge_search_node(state: ConversationState) -> ConversationState:
 
         state.search_query = search_query
 
-        # Simulate knowledge base search (in production, use vector search)
-        # For now, return empty results
-        search_results = []
+        # Get user's language
+        user_language = state.detected_language if state.detected_language else "en"
 
-        # In a real implementation, you would:
-        # 1. Use a vector database (e.g., Pinecone, Weaviate)
-        # 2. Perform semantic search
-        # 3. Return top-k results with relevance scores
+        # Use language-aware knowledge search
+        knowledge_search = LanguageAwareKnowledgeSearch()
+        search_results = knowledge_search.search_with_priority(
+            query=search_query,
+            user_language=user_language,
+            top_k=5,
+        )
 
-        state.search_results = search_results
+        # Convert to dict format for state
+        search_results_dicts = []
+        for result in search_results:
+            search_results_dicts.append({
+                "document_id": result.document_id,
+                "title": result.title,
+                "content": result.content,
+                "language": result.language,
+                "category": result.category,
+                "relevance_score": result.relevance_score,
+                "is_fallback": result.is_fallback,
+                "translation_note": result.translation_note,
+            })
+
+        state.search_results = search_results_dicts
 
         # Record intermediate result
         state.intermediate_results["knowledge_search"] = {
             "search_query": search_query,
+            "user_language": user_language,
             "result_count": len(search_results),
+            "native_language_results": sum(1 for r in search_results if not r.is_fallback),
+            "fallback_results": sum(1 for r in search_results if r.is_fallback),
         }
 
-        logger.info(f"Knowledge search completed: {len(search_results)} results")
+        logger.info(
+            f"Knowledge search completed: {len(search_results)} results "
+            f"(native: {sum(1 for r in search_results if not r.is_fallback)}, "
+            f"fallback: {sum(1 for r in search_results if r.is_fallback)})"
+        )
 
     except Exception as e:
         state.error = str(e)
