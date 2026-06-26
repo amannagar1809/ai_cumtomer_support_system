@@ -98,3 +98,28 @@ class AvailableVoicesResponse(BaseModel):
 
     voices: list[VoiceConfig] = Field(..., description="List of available voices")
 
+
+class VoiceFlowRequest(BaseModel):
+    """Request for voice flow (STT → LangGraph → TTS)."""
+
+    audio_data: str = Field(..., description="Base64-encoded audio data")
+    audio_format: str = Field(..., description="Audio format (mp3, wav, ogg, m4a)")
+    conversation_id: str | None = Field(default=None, description="Conversation ID")
+    user_id: str | None = Field(default=None, description="User ID")
+    channel: str = Field(default="voice", description="Communication channel")
+
+
+class VoiceFlowResponse(BaseModel):
+    """Response from voice flow with audio output."""
+
+    transcription: str = Field(..., description="Transcribed text from audio input")
+    transcription_confidence: float = Field(..., description="Transcription confidence score")
+    text_response: str = Field(..., description="AI text response")
+    audio_output: str = Field(..., description="Base64-encoded audio output")
+    audio_format: str = Field(..., description="Audio output format (mp3)")
+    audio_duration: float = Field(..., description="Audio output duration in seconds")
+    voice_id: str | None = Field(default=None, description="Voice ID used for TTS")
+    stt_provider: str = Field(..., description="STT provider used")
+    tts_provider: str = Field(..., description="TTS provider used")
+    processing_time_ms: float = Field(..., description="Total processing time in milliseconds")
+
