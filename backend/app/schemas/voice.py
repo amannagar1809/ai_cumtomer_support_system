@@ -11,6 +11,8 @@ class TranscribeAudioRequest(BaseModel):
     use_streaming: bool = Field(default=False, description="Whether to use streaming transcription")
     apply_noise_reduction: bool = Field(default=True, description="Whether to apply noise reduction")
     detect_speakers: bool = Field(default=False, description="Whether to detect multiple speakers")
+    use_chunked: bool = Field(default=True, description="Whether to use chunked processing for low latency")
+    user_region: str | None = Field(default=None, description="User's region for regional endpoint selection")
 
 
 class TranscribeAudioResponse(BaseModel):
@@ -25,6 +27,10 @@ class TranscribeAudioResponse(BaseModel):
     processing_time_ms: float = Field(..., description="Processing time in milliseconds")
     is_streaming: bool = Field(..., description="Whether streaming was used")
     noise_reduced: bool = Field(..., description="Whether noise reduction was applied")
+    is_chunked: bool = Field(..., description="Whether chunked processing was used")
+    from_cache: bool = Field(..., description="Whether result came from phrase cache")
+    regional_endpoint: str | None = Field(default=None, description="Regional endpoint used")
+    latency_target_met: bool = Field(..., description="Whether 500ms latency target was met")
     is_fallback: bool = Field(..., description="Whether fallback message was used")
 
 
