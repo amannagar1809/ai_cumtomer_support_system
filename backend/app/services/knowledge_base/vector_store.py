@@ -115,6 +115,7 @@ class VectorStore:
         top_k: int = 5,
         namespace: Optional[str] = None,
         filters: Optional[dict] = None,
+        category: Optional[str] = None,
     ) -> list[SearchResult]:
         """
         Search for similar chunks using vector similarity.
@@ -124,18 +125,27 @@ class VectorStore:
             top_k: Number of results to return
             namespace: Optional namespace to search in
             filters: Optional metadata filters
+            category: Optional category filter (products, policies, faqs, troubleshooting, processes)
 
         Returns:
             List of search results with similarity scores
         """
         try:
+            # Build filter dict
+            search_filters = filters or {}
+            if category:
+                search_filters["category"] = category
+
             # Placeholder implementation
             # In production, this would:
             # 1. Query vector database with embedding
-            # 2. Apply filters if provided
+            # 2. Apply filters including category
             # 3. Return top_k results with scores
 
-            logger.info(f"Searching for top {top_k} similar chunks")
+            logger.info(
+                f"Searching for top {top_k} similar chunks "
+                f"with filters: {search_filters}"
+            )
 
             # Placeholder: return empty results
             return []
@@ -180,6 +190,76 @@ class VectorStore:
                 message=f"Failed to delete document: {str(e)}",
                 chunk_count=0,
             )
+
+    def replace_document_version(
+        self,
+        old_document_id: str,
+        new_chunks: list[dict],
+        namespace: Optional[str] = None,
+    ) -> VectorStoreResult:
+        """
+        Replace old document version with new version.
+
+        Args:
+            old_document_id: Old document ID to replace
+            new_chunks: New chunks to store
+            namespace: Optional namespace
+
+        Returns:
+            Vector store result
+        """
+        try:
+            # Delete old version
+            delete_result = self.delete_document(old_document_id, namespace)
+
+            if not delete_result.success:
+                return VectorStoreResult(
+                    success=False,
+                    message=f"Failed to delete old version: {delete_result.message}",
+                    chunk_count=0,
+                )
+
+            # Store new version
+            store_result = self.store_chunks(new_chunks, namespace)
+
+            return store_result
+
+        except Exception as e:
+            logger.error(f"Failed to replace document version: {e}")
+            return VectorStoreResult(
+                success=False,
+                message=f"Failed to replace document version: {str(e)}",
+                chunk_count=0,
+            )
+
+    def update_chunk_metadata(
+        self,
+        chunk_id: str,
+        metadata: dict,
+        namespace: Optional[str] = None,
+    ) -> bool:
+        """
+        Update metadata for a specific chunk.
+
+        Args:
+            chunk_id: Chunk ID to update
+            metadata: New metadata
+            namespace: Optional namespace
+
+        Returns:
+            Whether update was successful
+        """
+        try:
+            # Placeholder implementation
+            # In production, this would update the chunk metadata in vector database
+
+            logger.info(f"Updating metadata for chunk {chunk_id}")
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to update chunk metadata: {e}")
+            return False
 
     def get_document_chunks(
         self,

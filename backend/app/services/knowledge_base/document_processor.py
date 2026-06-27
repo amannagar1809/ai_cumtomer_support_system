@@ -4,6 +4,7 @@ import base64
 import hashlib
 import logging
 import re
+from datetime import datetime
 from enum import Enum
 from io import BytesIO
 from typing import Optional
@@ -14,6 +15,32 @@ logger = logging.getLogger(__name__)
 
 # Supported file types
 SUPPORTED_FILE_TYPES = ["pdf", "docx", "txt", "md", "html"]
+
+# Knowledge base categories
+CATEGORY_PRODUCTS = "products"
+CATEGORY_POLICIES = "policies"
+CATEGORY_FAQS = "faqs"
+CATEGORY_TROUBLESHOOTING = "troubleshooting"
+CATEGORY_PROCESSES = "processes"
+
+KNOWLEDGE_CATEGORIES = [
+    CATEGORY_PRODUCTS,
+    CATEGORY_POLICIES,
+    CATEGORY_FAQS,
+    CATEGORY_TROUBLESHOOTING,
+    CATEGORY_PROCESSES,
+]
+
+# Document review status
+REVIEW_STATUS_PENDING = "pending"
+REVIEW_STATUS_APPROVED = "approved"
+REVIEW_STATUS_REJECTED = "rejected"
+
+REVIEW_STATUSES = [
+    REVIEW_STATUS_PENDING,
+    REVIEW_STATUS_APPROVED,
+    REVIEW_STATUS_REJECTED,
+]
 
 # Chunking parameters
 CHUNK_MIN_SIZE = 500
@@ -45,6 +72,11 @@ class DocumentChunk(BaseModel):
     start_char: int = Field(description="Start character position")
     end_char: int = Field(description="End character position")
     embedding: Optional[list[float]] = Field(default=None, description="Text embedding vector")
+    # Metadata
+    source_document: str = Field(description="Source document filename")
+    category: str = Field(description="Knowledge category (products, policies, faqs, troubleshooting, processes)")
+    version: str = Field(default="1.0", description="Document version")
+    last_updated: datetime = Field(default_factory=datetime.utcnow, description="Last updated timestamp")
 
 
 class DocumentMetadata(BaseModel):
@@ -57,6 +89,11 @@ class DocumentMetadata(BaseModel):
     text_length: int = Field(description="Total extracted text length")
     chunk_count: int = Field(description="Number of chunks created")
     processing_time_ms: float = Field(description="Processing time in milliseconds")
+    # Additional metadata
+    category: str = Field(description="Knowledge category")
+    version: str = Field(default="1.0", description="Document version")
+    review_status: str = Field(default=REVIEW_STATUS_PENDING, description="Review status (pending, approved, rejected)")
+    uploaded_at: datetime = Field(default_factory=datetime.utcnow, description="Upload timestamp")
 
 
 class DocumentProcessor:
@@ -89,6 +126,8 @@ class DocumentProcessor:
         file_data: bytes,
         filename: str,
         file_type: str,
+        category: str,
+        version: str = "1.0",
         document_id: Optional[str] = None,
     ) -> tuple[list[DocumentChunk], DocumentMetadata]:
         """
@@ -98,6 +137,8 @@ class DocumentProcessor:
             file_data: File data as bytes
             filename: Original filename
             file_type: File type (pdf, docx, txt, md, html)
+            category: Knowledge category (products, policies, faqs, troubleshooting, processes)
+            version: Document version
             document_id: Document ID (generated if not provided)
 
         Returns:
@@ -106,6 +147,10 @@ class DocumentProcessor:
         import time
 
         start_time = time.time()
+
+        # Validate category
+        if category not in KNOWLEDGE_CATEGORIES:
+            raise ValueError(f"Invalid category. Must be one of: {', '.join(KNOWLEDGE_CATEGORIES)}")
 
         # Generate document ID if not provided
         if not document_id:
@@ -117,8 +162,14 @@ class DocumentProcessor:
         # Clean extracted text
         cleaned_text = self._clean_text(text)
 
-        # Split into chunks
-        chunks = self._split_into_chunks(cleaned_text, document_id)
+        # Split into chunks with metadata
+        chunks = self._split_into_chunks(
+            cleaned_text,
+            document_id,
+            filename,
+            category,
+            version,
+        )
 
         # Generate embeddings for each chunk
         chunks_with_embeddings = self._generate_embeddings(chunks)
@@ -133,10 +184,15 @@ class DocumentProcessor:
             text_length=len(cleaned_text),
             chunk_count=len(chunks_with_embeddings),
             processing_time_ms=processing_time_ms,
+            category=category,
+            version=version,
+            review_status=REVIEW_STATUS_PENDING,
         )
 
         logger.info(
             f"Document processed: {filename}, "
+            f"category: {category}, "
+            f"version: {version}, "
             f"chunks: {len(chunks_with_embeddings)}, "
             f"time: {processing_time_ms:.2f}ms"
         )
@@ -279,13 +335,19 @@ class DocumentProcessor:
         self,
         text: str,
         document_id: str,
+        filename: str,
+        category: str,
+        version: str,
     ) -> list[DocumentChunk]:
         """
-        Split text into chunks with overlap.
+        Split text into chunks with overlap and metadata.
 
         Args:
             text: Text to split
             document_id: Document ID
+            filename: Source document filename
+            category: Knowledge category
+            version: Document version
 
         Returns:
             List of document chunks
@@ -308,7 +370,7 @@ class DocumentProcessor:
             # Generate chunk ID
             chunk_id = f"{document_id}_chunk_{chunk_index}"
 
-            # Create chunk
+            # Create chunk with metadata
             chunk = DocumentChunk(
                 chunk_id=chunk_id,
                 document_id=document_id,
@@ -317,6 +379,10 @@ class DocumentProcessor:
                 start_char=start,
                 end_char=end,
                 embedding=None,
+                source_document=filename,
+                category=category,
+                version=version,
+                last_updated=datetime.utcnow(),
             )
 
             chunks.append(chunk)
@@ -328,7 +394,7 @@ class DocumentProcessor:
 
             chunk_index += 1
 
-        logger.info(f"Split text into {len(chunks)} chunks")
+        logger.info(f"Split text into {len(chunks)} chunks with metadata")
         return chunks
 
     def _generate_embeddings(
