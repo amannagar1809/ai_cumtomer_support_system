@@ -240,6 +240,19 @@ class ConversationState(BaseModel):
     tts_provider: Optional[str] = Field(default=None, description="TTS provider used")
     is_voice_flow: bool = Field(default=False, description="Whether this is a voice flow conversation")
 
+    # RAG (Retrieval-Augmented Generation) data
+    rag_enabled: bool = Field(default=True, description="Whether RAG is enabled for this conversation")
+    rag_category_filter: Optional[str] = Field(default=None, description="Category filter for RAG retrieval")
+    rag_chunks_retrieved: list[dict] = Field(default_factory=list, description="Retrieved chunks from knowledge base")
+    rag_retrieval_success: bool = Field(default=False, description="Whether RAG retrieval was successful")
+    rag_chunks_above_threshold: int = Field(default=0, description="Number of chunks above similarity threshold")
+    rag_top_similarity: float = Field(default=0.0, description="Highest similarity score from retrieval")
+    rag_avg_similarity: float = Field(default=0.0, description="Average similarity score from retrieval")
+    rag_context_prompt: Optional[str] = Field(default=None, description="Context prompt built from retrieved chunks")
+    rag_retrieval_time_ms: Optional[float] = Field(default=None, description="RAG retrieval time in milliseconds")
+    rag_used_in_response: bool = Field(default=False, description="Whether RAG context was used in response")
+    rag_citations_included: bool = Field(default=False, description="Whether citations were included in response")
+
     class Config:
         """Pydantic configuration."""
 
