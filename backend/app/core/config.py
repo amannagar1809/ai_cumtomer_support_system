@@ -15,6 +15,7 @@ class Settings(BaseSettings):
 
     app_env: str = "development"
     app_port: int = 8000
+    secret_key: str = "your-secret-key-change-this-in-production"
     database_url: str = (
         "postgresql+asyncpg://postgres:postgres@localhost:15432/ai_support"
     )
@@ -22,6 +23,10 @@ class Settings(BaseSettings):
         "postgresql+asyncpg://analytics_reader:analytics_pass@localhost:15433/ai_support"
     )
     redis_url: str = "redis://localhost:6379/0"
+    redis_host: str = "localhost"
+    redis_port: int = 6379
+    redis_db: int = 0
+    redis_password: str | None = None
     redis_chat_memory_url: str = "redis://localhost:6379/1"
     redis_session_ttl_seconds: int = 1800  # 30 minutes
     session_cleanup_interval_seconds: int = 3600
