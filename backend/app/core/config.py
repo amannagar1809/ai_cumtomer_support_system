@@ -120,5 +120,15 @@ class Settings(BaseSettings):
     mobile_max_offline_messages: int = 100
     mobile_message_sync_enabled: bool = True
 
+    # OAuth2 Configuration
+    google_oauth_client_id: str | None = None
+    google_oauth_client_secret: str | None = None
+    microsoft_oauth_client_id: str | None = None
+    microsoft_oauth_client_secret: str | None = None
+    github_oauth_client_id: str | None = None
+    github_oauth_client_secret: str | None = None
+    slack_oauth_client_id: str | None = None
+    slack_oauth_client_secret: str | None = None
+
 
 settings = Settings()
