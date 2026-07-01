@@ -148,5 +148,10 @@ class Settings(BaseSettings):
     tls_cert_file: str | None = None
     tls_key_file: str | None = None
 
+    # Audit Log Configuration
+    audit_log_enabled: bool = True
+    audit_log_retention_days: int = 365  # 1 year minimum for compliance
+    audit_log_append_only: bool = True
+
 
 settings = Settings()
