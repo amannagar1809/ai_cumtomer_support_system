@@ -153,5 +153,16 @@ class Settings(BaseSettings):
     audit_log_retention_days: int = 365  # 1 year minimum for compliance
     audit_log_append_only: bool = True
 
+    # Rate Limiting Configuration
+    rate_limit_enabled: bool = True
+    rate_limit_user_per_minute: int = 60
+    rate_limit_user_per_hour: int = 1000
+    rate_limit_ip_per_minute: int = 120
+    rate_limit_ip_per_hour: int = 2000
+    rate_limit_auth_per_minute: int = 5
+    rate_limit_auth_per_hour: int = 50
+    rate_limit_sustained_threshold: int = 10  # Consecutive hits before alerting
+    rate_limit_whitelist: list[str] = []  # Whitelisted IP addresses
+
 
 settings = Settings()
