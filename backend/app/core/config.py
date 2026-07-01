@@ -130,5 +130,23 @@ class Settings(BaseSettings):
     slack_oauth_client_id: str | None = None
     slack_oauth_client_secret: str | None = None
 
+    # Encryption Configuration
+    encryption_master_key: str = "change-this-to-a-secure-key-in-production"
+    encryption_enabled: bool = True
+    encryption_key_rotation_days: int = 90  # Quarterly rotation
+
+    # KMS Configuration
+    kms_provider: str = "local"  # local, aws, vault
+    kms_master_key_id: str | None = None
+    aws_kms_region: str = "us-east-1"
+    vault_url: str | None = None
+    vault_token: str | None = None
+
+    # TLS Configuration
+    tls_enabled: bool = True
+    tls_min_version: str = "TLSv1.3"
+    tls_cert_file: str | None = None
+    tls_key_file: str | None = None
+
 
 settings = Settings()
