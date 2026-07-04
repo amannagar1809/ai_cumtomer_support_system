@@ -10,7 +10,6 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
-
 class NormalizedMessage(BaseModel):
     """Normalized message format for all channels."""
 
@@ -24,7 +23,6 @@ class NormalizedMessage(BaseModel):
     timestamp: datetime
     language: str | None = None
     metadata: dict[str, Any] = {}  # Channel-specific metadata
-
 
 class ChannelConnector(ABC):
     """Abstract base class for channel connectors."""
