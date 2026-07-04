@@ -1,0 +1,21 @@
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+python-dotenv>=1.0.0
+pydantic-settings>=2.6.0
+
+# Tech stack
+langgraph>=0.2.0
+langchain-core>=0.3.0
+redis>=5.0.0
+sqlalchemy[asyncio]>=2.0.0
+asyncpg>=0.29.0
+psycopg2-binary>=2.9.0
+alembic>=1.14.0
+
+# File uploads (optional cloud backends)
+boto3>=1.35.0
+google-cloud-storage>=2.18.0
+
+# Message processing
+bleach>=6.0.0
+unicodedata2>=15.0.0

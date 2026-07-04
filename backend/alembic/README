@@ -1,0 +1,32 @@
+# Alembic migrations
+
+## Apply all schema (initial + incremental)
+
+```bash
+cd backend
+python -m alembic upgrade head
+```
+
+## Revision chain
+
+| Revision | Description |
+|----------|-------------|
+| `20260602_0001` | users |
+| `20260602_0002` | conversations |
+| `20260602_0003` | messages (partitioned) + archive |
+| `20260602_0004` | tickets + status rules |
+
+## Rollback (one step)
+
+```bash
+python -m alembic downgrade -1
+python -m alembic downgrade 20260602_0003
+python -m alembic downgrade base
+```
+
+SQL rollbacks: `backend/db/rollback/`
+
+## Helpers
+
+- `scripts/db/migrate.ps1 upgrade|downgrade|current|history`
+- `scripts/db/migrate.sh upgrade|downgrade|current|history`

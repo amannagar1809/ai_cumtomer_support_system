@@ -1,0 +1,168 @@
+from pathlib import Path
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Project root .env (works when running from backend/)
+_ROOT_DIR = Path(__file__).resolve().parents[3]
+_ENV_FILE = _ROOT_DIR / ".env"
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=str(_ENV_FILE) if _ENV_FILE.exists() else ".env",
+        extra="ignore",
+    )
+
+    app_env: str = "development"
+    app_port: int = 8000
+    secret_key: str = "your-secret-key-change-this-in-production"
+    database_url: str = (
+        "postgresql+asyncpg://postgres:postgres@localhost:15432/ai_support"
+    )
+    database_replica_url: str | None = (
+        "postgresql+asyncpg://analytics_reader:analytics_pass@localhost:15433/ai_support"
+    )
+    redis_url: str = "redis://localhost:6379/0"
+    redis_host: str = "localhost"
+    redis_port: int = 6379
+    redis_db: int = 0
+    redis_password: str | None = None
+    redis_chat_memory_url: str = "redis://localhost:6379/1"
+    redis_session_ttl_seconds: int = 1800  # 30 minutes
+    session_cleanup_interval_seconds: int = 3600
+    redis_chat_memory_ttl_seconds: int = 1800  # 30 minutes
+    redis_user_context_ttl_seconds: int = 604800  # 7 days
+    rate_limit_user_messages_per_minute: int = 10
+    rate_limit_ip_requests_per_minute: int = 1000
+    redis_queue_url: str = "redis://localhost:6379/2"
+    queue_max_retry_attempts: int = 3
+    queue_retry_base_seconds: int = 1
+    queue_consumer_block_ms: int = 5000
+    cors_origins: str = "http://localhost:8000,http://127.0.0.1:8000"
+    chat_greeting_message: str = (
+        "Hi there! Welcome to AI Customer Support. How can we help you today?"
+    )
+    chat_inactivity_trigger_seconds: int = 30
+    chat_history_message_limit: int = 10
+    chat_ai_processing_delay_seconds: float = 6.0
+    chat_typing_still_working_after_seconds: int = 5
+    chat_ws_heartbeat_interval_seconds: int = 25
+    chat_ws_pong_timeout_seconds: int = 10
+    chat_ws_max_connections: int = 10000
+    chat_ws_replay_buffer_size: int = 100
+    chat_ws_shutdown_timeout_seconds: float = 5.0
+    chat_memory_cached_messages: int = 50
+    storage_provider: str = "local"
+    storage_bucket: str = "ai-support-uploads"
+    storage_region: str = "us-east-1"
+    aws_access_key_id: str | None = None
+    aws_secret_access_key: str | None = None
+    gcs_credentials_path: str | None = None
+    upload_local_dir: str = "./uploads"
+    upload_signing_secret: str = "dev-upload-signing-secret-change-me"
+    upload_max_file_size_bytes: int = 10 * 1024 * 1024
+    upload_max_files_per_message: int = 3
+    upload_chunk_size_bytes: int = 1024 * 1024
+    upload_signed_url_ttl_seconds: int = 3600
+    openai_api_key: str | None = None
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    backup_dir: str = "./backups/postgres"
+    backup_retention_days: int = 35
+    wal_archive_dir: str = "./backups/wal_archive"
+
+    # WhatsApp Business API Configuration
+    whatsapp_enabled: bool = False
+    whatsapp_phone_number_id: str | None = None
+    whatsapp_access_token: str | None = None
+    whatsapp_webhook_verify_token: str | None = None
+    whatsapp_api_version: str = "v18.0"
+    whatsapp_business_account_id: str | None = None
+    whatsapp_template_namespace: str | None = None
+
+    # Email Configuration
+    email_enabled: bool = False
+    email_provider: str = "postmark"  # postmark, sendgrid, custom
+    email_from_address: str = "support@example.com"
+    email_from_name: str = "AI Customer Support"
+    email_reply_to: str = "support@example.com"
+    email_postmark_api_key: str | None = None
+    email_sendgrid_api_key: str | None = None
+    email_imap_host: str | None = None
+    email_imap_port: int = 993
+    email_imap_username: str | None = None
+    email_imap_password: str | None = None
+    email_imap_use_ssl: bool = True
+    email_rate_limit_per_day: int = 50
+
+    # Telegram Bot Configuration
+    telegram_enabled: bool = False
+    telegram_bot_token: str | None = None
+    telegram_webhook_url: str | None = None
+    telegram_webhook_secret: str | None = None
+    telegram_use_polling: bool = False
+    telegram_polling_interval: int = 30
+    telegram_max_message_length: int = 4096
+    telegram_max_file_size_mb: int = 50
+
+    # Mobile Chat Configuration
+    mobile_chat_enabled: bool = True
+    mobile_long_polling_enabled: bool = True
+    mobile_long_polling_timeout: int = 30
+    mobile_push_notifications_enabled: bool = False
+    mobile_firebase_server_key: str | None = None
+    mobile_apns_key_id: str | None = None
+    mobile_apns_team_id: str | None = None
+    mobile_offline_queue_enabled: bool = True
+    mobile_max_offline_messages: int = 100
+    mobile_message_sync_enabled: bool = True
+
+    # OAuth2 Configuration
+    google_oauth_client_id: str | None = None
+    google_oauth_client_secret: str | None = None
+    microsoft_oauth_client_id: str | None = None
+    microsoft_oauth_client_secret: str | None = None
+    github_oauth_client_id: str | None = None
+    github_oauth_client_secret: str | None = None
+    slack_oauth_client_id: str | None = None
+    slack_oauth_client_secret: str | None = None
+
+    # Encryption Configuration
+    encryption_master_key: str = "change-this-to-a-secure-key-in-production"
+    encryption_enabled: bool = True
+    encryption_key_rotation_days: int = 90  # Quarterly rotation
+
+    # KMS Configuration
+    kms_provider: str = "local"  # local, aws, vault
+    kms_master_key_id: str | None = None
+    aws_kms_region: str = "us-east-1"
+    vault_url: str | None = None
+    vault_token: str | None = None
+
+    # TLS Configuration
+    tls_enabled: bool = True
+    tls_min_version: str = "TLSv1.3"
+    tls_cert_file: str | None = None
+    tls_key_file: str | None = None
+
+    # Audit Log Configuration
+    audit_log_enabled: bool = True
+    audit_log_retention_days: int = 365  # 1 year minimum for compliance
+    audit_log_append_only: bool = True
+
+    # Rate Limiting Configuration
+    rate_limit_enabled: bool = True
+    rate_limit_user_per_minute: int = 60
+    rate_limit_user_per_hour: int = 1000
+    rate_limit_ip_per_minute: int = 120
+    rate_limit_ip_per_hour: int = 2000
+    rate_limit_auth_per_minute: int = 5
+    rate_limit_auth_per_hour: int = 50
+    rate_limit_sustained_threshold: int = 10  # Consecutive hits before alerting
+    rate_limit_whitelist: list[str] = []  # Whitelisted IP addresses
+
+
+settings = Settings()

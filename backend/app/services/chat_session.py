@@ -1,0 +1,644 @@
+from datetime import UTC, datetime, timedelta
+from uuid import UUID, uuid4
+
+from sqlalchemy import desc, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import settings
+from app.models.conversation import Conversation, ConversationChannel, ConversationStatus
+from app.models.user import CustomerType, User
+from app.schemas.chat import (
+    ChatGreetingMessage,
+    ChatSessionMetadata,
+    ChatSessionResponse,
+    ChatSessionStatusResponse,
+    ContinueConversationResponse,
+    ConversationMessageResponse,
+    ConversationMessagesResponse,
+    CreateChatSessionRequest,
+    ReturningUserResponse,
+    SendMessageResponse,
+    TransferSessionResponse,
+)
+from app.models.message import Message
+from app.schemas.chat_memory import ChatMemoryMessage, ChatMemoryRole
+from app.schemas.session import SessionMetadata, UserContext
+from app.schemas.upload import MessageAttachment
+from app.services.chat_memory import ChatMemoryService
+from app.services.langgraph_attachments import LangGraphAttachmentService
+from app.services.message_store import MessageStoreService
+from app.services.session_cache import SessionCacheService
+from app.services.user_context_cache import UserContextCacheService
+
+
+def anonymous_email(anonymous_user_id: UUID) -> str:
+    return f"anon-{anonymous_user_id}@guest.local"
+
+
+class ChatSessionService:
+    def __init__(self) -> None:
+        self._sessions = SessionCacheService()
+        self._chat_memory = ChatMemoryService()
+        self._user_context = UserContextCacheService()
+        self._messages = MessageStoreService()
+
+    def _greeting_text(self, metadata: ChatSessionMetadata) -> str:
+        locale = metadata.locale.lower()
+        if locale.startswith("es"):
+            return "Hola. Estamos aqui para ayudarte. En que podemos asistirte hoy?"
+        return settings.chat_greeting_message
+
+    def _expires_at(self, last_activity: datetime) -> datetime:
+        return last_activity + timedelta(seconds=settings.redis_session_ttl_seconds)
+
+    def _to_user_context(self, user: User) -> UserContext:
+        return UserContext(
+            user_id=user.id,
+            email=user.email,
+            name=user.name,
+            customer_type=user.customer_type.value,
+            language=user.language,
+        )
+
+    def _to_message_response(self, msg: ChatMemoryMessage) -> ConversationMessageResponse:
+        return ConversationMessageResponse(
+            id=msg.id,
+            role=msg.role.value,
+            content=msg.content,
+            timestamp=msg.timestamp,
+        )
+
+    async def _get_user_by_anonymous_id(
+        self,
+        db: AsyncSession,
+        anonymous_user_id: UUID,
+    ) -> User | None:
+        result = await db.execute(
+            select(User).where(User.email == anonymous_email(anonymous_user_id))
+        )
+        return result.scalar_one_or_none()
+
+    async def _get_or_create_guest_user(
+        self,
+        db: AsyncSession,
+        anonymous_user_id: UUID,
+        language: str,
+    ) -> User:
+        user = await self._get_user_by_anonymous_id(db, anonymous_user_id)
+        if user:
+            return user
+
+        user = User(
+            name="Guest",
+            email=anonymous_email(anonymous_user_id),
+            language=language[:2] if language else "en",
+            customer_type=CustomerType.regular,
+        )
+        db.add(user)
+        await db.flush()
+        return user
+
+    async def _get_request_user(
+        self,
+        db: AsyncSession,
+        anonymous_user_id: UUID,
+        authenticated_user_id: UUID | None = None,
+    ) -> User | None:
+        if authenticated_user_id is not None:
+            return await db.get(User, authenticated_user_id)
+        return await self._get_user_by_anonymous_id(db, anonymous_user_id)
+
+    async def _get_latest_conversation(
+        self,
+        db: AsyncSession,
+        user_id: UUID,
+    ) -> Conversation | None:
+        stmt = (
+            select(Conversation)
+            .where(Conversation.user_id == user_id)
+            .order_by(desc(Conversation.started_at))
+            .limit(1)
+        )
+        result = await db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def _persist_and_cache_message(
+        self,
+        db: AsyncSession,
+        conversation_id: UUID,
+        role: ChatMemoryRole,
+        content: str,
+        *,
+        language: str = "en",
+        timestamp: datetime | None = None,
+        attachments: list[MessageAttachment] | None = None,
+    ) -> tuple[Message, ChatMemoryMessage]:
+        ts = timestamp or datetime.now(UTC)
+        attachment_list = attachments or []
+        display_content = MessageStoreService.format_content_with_attachments(
+            content,
+            attachment_list,
+        )
+        row = await self._messages.persist(
+            db,
+            conversation_id=conversation_id,
+            role=role,
+            content=content,
+            language=language,
+            timestamp=ts.replace(tzinfo=None),
+            attachments=attachment_list,
+        )
+        memory_message = ChatMemoryMessage(
+            id=row.id,
+            role=role,
+            content=display_content,
+            timestamp=ts,
+        )
+        await self._chat_memory.append_message(conversation_id, memory_message)
+        return row, memory_message
+
+    async def _append_greeting(
+        self,
+        db: AsyncSession,
+        conversation_id: UUID,
+        content: str,
+        *,
+        language: str = "en",
+    ) -> ChatGreetingMessage:
+        _row, message = await self._persist_and_cache_message(
+            db,
+            conversation_id,
+            ChatMemoryRole.ai,
+            content,
+            language=language,
+        )
+        return ChatGreetingMessage(content=message.content, timestamp=message.timestamp)
+
+    async def _get_recent_messages(
+        self,
+        db: AsyncSession,
+        conversation_id: UUID,
+    ) -> list[ChatMemoryMessage]:
+        limit = settings.chat_history_message_limit
+        memory = await self._chat_memory.get_messages(conversation_id)
+        if memory.messages:
+            return memory.messages[-limit:]
+        return await self._messages.fetch_last_messages(
+            db,
+            conversation_id,
+            limit=limit,
+        )
+
+    async def _hydrate_context(
+        self,
+        db: AsyncSession,
+        user: User,
+        conversation_id: UUID,
+    ) -> list[ChatMemoryMessage]:
+        """Load last messages into Redis and user context before the customer types."""
+        messages = await self._messages.fetch_last_messages(
+            db,
+            conversation_id,
+            limit=settings.chat_memory_cached_messages,
+        )
+        await self._chat_memory.load_messages(conversation_id, messages)
+        await self._user_context.preload_on_conversation_start(
+            user.id,
+            conversation_id,
+            db,
+        )
+        return messages
+
+    async def get_returning_user_status(
+        self,
+        db: AsyncSession,
+        anonymous_user_id: UUID,
+    ) -> ReturningUserResponse:
+        user = await self._get_user_by_anonymous_id(db, anonymous_user_id)
+        if user is None:
+            return ReturningUserResponse(is_returning_user=False)
+
+        conversation = await self._get_latest_conversation(db, user.id)
+        if conversation is None:
+            return ReturningUserResponse(is_returning_user=False)
+
+        message_count = await self._messages.count_messages(db, conversation.id)
+        if message_count == 0:
+            return ReturningUserResponse(is_returning_user=False)
+
+        last_active = await self._messages.get_last_activity(db, conversation.id)
+        if last_active is None:
+            last_active = conversation.started_at.replace(tzinfo=UTC)
+
+        return ReturningUserResponse(
+            is_returning_user=True,
+            conversation_id=conversation.id,
+            last_active_at=last_active,
+            message_count=message_count,
+            can_continue=True,
+        )
+
+    async def continue_conversation(
+        self,
+        db: AsyncSession,
+        conversation_id: UUID,
+        anonymous_user_id: UUID,
+        authenticated_user_id: UUID | None = None,
+        session_metadata: SessionMetadata | None = None,
+    ) -> ContinueConversationResponse | None:
+        user = await self._get_request_user(db, anonymous_user_id, authenticated_user_id)
+        if user is None:
+            return None
+
+        conversation = await self._messages.verify_conversation_owner(
+            db,
+            conversation_id,
+            user.id,
+        )
+        if conversation is None:
+            return None
+
+        conversation.status = ConversationStatus.active
+        conversation.ended_at = None
+
+        messages = await self._hydrate_context(db, user, conversation_id)
+
+        user_context = self._to_user_context(user)
+        session = await self._sessions.create(
+            user_context,
+            permissions=["chat:read", "chat:write"],
+            conversation_id=conversation_id,
+            metadata=session_metadata,
+        )
+        await self._sessions.touch(user.id, session.session_id)
+
+        last_active = await self._messages.get_last_activity(db, conversation_id)
+        if last_active is None:
+            last_active = conversation.started_at.replace(tzinfo=UTC)
+
+        await db.commit()
+
+        message_responses = await self._messages.fetch_last_message_responses(
+            db,
+            conversation_id,
+            limit=settings.chat_history_message_limit,
+        )
+        return ContinueConversationResponse(
+            session_id=session.session_id,
+            conversation_id=conversation_id,
+            anonymous_user_id=anonymous_user_id,
+            expires_at=self._expires_at(session.last_activity),
+            last_active_at=last_active,
+            messages=message_responses,
+            context_loaded=True,
+        )
+
+    async def get_conversation_messages(
+        self,
+        db: AsyncSession,
+        conversation_id: UUID,
+        anonymous_user_id: UUID,
+        authenticated_user_id: UUID | None = None,
+    ) -> ConversationMessagesResponse | None:
+        user = await self._get_request_user(db, anonymous_user_id, authenticated_user_id)
+        if user is None:
+            return None
+
+        conversation = await self._messages.verify_conversation_owner(
+            db,
+            conversation_id,
+            user.id,
+        )
+        if conversation is None:
+            return None
+
+        messages = await self._messages.fetch_last_message_responses(
+            db,
+            conversation_id,
+            limit=settings.chat_history_message_limit,
+        )
+        return ConversationMessagesResponse(
+            conversation_id=conversation_id,
+            messages=messages,
+        )
+
+    async def send_message(
+        self,
+        db: AsyncSession,
+        conversation_id: UUID,
+        anonymous_user_id: UUID,
+        content: str,
+        *,
+        authenticated_user_id: UUID | None = None,
+        session_id: UUID | None = None,
+        attachments: list[MessageAttachment] | None = None,
+    ) -> SendMessageResponse | None:
+        user = await self._get_request_user(db, anonymous_user_id, authenticated_user_id)
+        if user is None:
+            return None
+
+        conversation = await self._messages.verify_conversation_owner(
+            db,
+            conversation_id,
+            user.id,
+        )
+        if conversation is None:
+            return None
+
+        attachment_list = attachments or []
+        if not content.strip() and not attachment_list:
+            raise ValueError("Message must include text or attachments")
+        if len(attachment_list) > settings.upload_max_files_per_message:
+            raise ValueError(
+                f"Maximum {settings.upload_max_files_per_message} files per message"
+            )
+
+        row, _memory = await self._persist_and_cache_message(
+            db,
+            conversation_id,
+            ChatMemoryRole.customer,
+            content,
+            language=user.language,
+            attachments=attachment_list,
+        )
+        if attachment_list:
+            await LangGraphAttachmentService().submit_for_processing(
+                conversation_id=conversation_id,
+                message_id=row.id,
+                attachments=attachment_list,
+            )
+        if session_id:
+            await self._sessions.touch(user.id, session_id)
+        await db.commit()
+
+        from app.services.ai_response import AiResponseService
+
+        AiResponseService().schedule(conversation_id, content)
+
+        return SendMessageResponse(
+            message=self._messages.message_to_response(
+                row,
+                role=ChatMemoryRole.customer.value,
+            )
+        )
+
+    async def persist_ai_reply(
+        self,
+        db: AsyncSession,
+        conversation_id: UUID,
+        content: str,
+        *,
+        language: str = "en",
+    ) -> Message:
+        row, _ = await self._persist_and_cache_message(
+            db,
+            conversation_id,
+            ChatMemoryRole.ai,
+            content,
+            language=language,
+        )
+        return row
+
+    async def redact_message(
+        self,
+        db: AsyncSession,
+        conversation_id: UUID,
+        message_id: UUID,
+        anonymous_user_id: UUID,
+        reason: str,
+        authenticated_user_id: UUID | None = None,
+    ) -> Message | None:
+        user = await self._get_request_user(db, anonymous_user_id, authenticated_user_id)
+        if user is None:
+            return None
+
+        conversation = await self._messages.verify_conversation_owner(
+            db,
+            conversation_id,
+            user.id,
+        )
+        if conversation is None:
+            return None
+
+        message = await self._messages.redact_message(
+            db,
+            conversation_id=conversation_id,
+            message_id=message_id,
+            reason=reason,
+        )
+        if message is None:
+            return None
+
+        messages = await self._messages.fetch_last_messages(
+            db,
+            conversation_id,
+            limit=settings.chat_memory_cached_messages,
+        )
+        await self._chat_memory.load_messages(conversation_id, messages)
+        await db.commit()
+        return message
+
+    async def _resume_session(
+        self,
+        db: AsyncSession,
+        anonymous_user_id: UUID,
+        session_id: UUID,
+        conversation_id: UUID,
+    ) -> ChatSessionResponse | None:
+        user = await self._get_user_by_anonymous_id(db, anonymous_user_id)
+        if user is None:
+            return None
+
+        session = await self._sessions.get(user.id, session_id)
+        if session is None or session.conversation_id != conversation_id:
+            return None
+
+        session = await self._sessions.touch(user.id, session_id)
+        if session is None:
+            return None
+
+        await self._hydrate_context(db, user, conversation_id)
+
+        messages = await self._get_recent_messages(db, conversation_id)
+        if messages:
+            first = messages[0]
+            greeting = ChatGreetingMessage(
+                content=first.content,
+                timestamp=first.timestamp,
+            )
+        else:
+            greeting = await self._append_greeting(
+                db,
+                conversation_id,
+                settings.chat_greeting_message,
+                language=user.language,
+            )
+            await db.commit()
+
+        return ChatSessionResponse(
+            session_id=session.session_id,
+            conversation_id=conversation_id,
+            anonymous_user_id=anonymous_user_id,
+            expires_at=self._expires_at(session.last_activity),
+            greeting=greeting,
+            resumed=True,
+            authenticated_user_id=session.metadata.authenticated_user_id,
+        )
+
+    async def start_session(
+        self,
+        db: AsyncSession,
+        request: CreateChatSessionRequest,
+        session_metadata: SessionMetadata | None = None,
+    ) -> ChatSessionResponse:
+        anonymous_user_id = request.anonymous_user_id or uuid4()
+        language = request.metadata.locale
+
+        if (
+            request.session_id
+            and request.conversation_id
+            and request.anonymous_user_id
+        ):
+            resumed = await self._resume_session(
+                db,
+                anonymous_user_id,
+                request.session_id,
+                request.conversation_id,
+            )
+            if resumed:
+                return resumed
+
+        authenticated_user: User | None = None
+        if request.authenticated_user_id is not None:
+            authenticated_user = await db.get(User, request.authenticated_user_id)
+
+        user = authenticated_user or await self._get_or_create_guest_user(
+            db,
+            anonymous_user_id,
+            language,
+        )
+
+        conversation = Conversation(
+            user_id=user.id,
+            channel=request.channel,
+            status=ConversationStatus.active,
+        )
+        db.add(conversation)
+        await db.flush()
+
+        metadata = session_metadata or SessionMetadata()
+        if authenticated_user is not None:
+            metadata.authenticated_user_id = authenticated_user.id
+            metadata.is_authenticated = True
+
+        user_context = self._to_user_context(user)
+        session = await self._sessions.create(
+            user_context,
+            permissions=["chat:read", "chat:write"],
+            conversation_id=conversation.id,
+            metadata=metadata,
+        )
+        await self._user_context.preload_on_conversation_start(
+            user.id,
+            conversation.id,
+            db,
+        )
+
+        greeting_text = self._greeting_text(request.metadata)
+        greeting = await self._append_greeting(
+            db,
+            conversation.id,
+            greeting_text,
+            language=user.language[:2],
+        )
+
+        await db.commit()
+
+        return ChatSessionResponse(
+            session_id=session.session_id,
+            conversation_id=conversation.id,
+            anonymous_user_id=anonymous_user_id,
+            expires_at=self._expires_at(session.last_activity),
+            greeting=greeting,
+            resumed=False,
+            authenticated_user_id=session.metadata.authenticated_user_id,
+        )
+
+    async def get_session_status(
+        self,
+        db: AsyncSession,
+        session_id: UUID,
+        anonymous_user_id: UUID,
+        authenticated_user_id: UUID | None = None,
+    ) -> ChatSessionStatusResponse | None:
+        user = await self._get_request_user(db, anonymous_user_id, authenticated_user_id)
+        if user is None:
+            return None
+
+        session = await self._sessions.get(user.id, session_id)
+        if session is None or session.conversation_id is None:
+            return None
+
+        messages = await self._get_recent_messages(db, session.conversation_id)
+        if messages:
+            first = messages[0]
+            greeting = ChatGreetingMessage(
+                content=first.content,
+                timestamp=first.timestamp,
+            )
+        else:
+            greeting = ChatGreetingMessage(
+                content=settings.chat_greeting_message,
+                timestamp=session.last_activity,
+            )
+
+        return ChatSessionStatusResponse(
+            session_id=session.session_id,
+            conversation_id=session.conversation_id,
+            anonymous_user_id=anonymous_user_id,
+            expires_at=self._expires_at(session.last_activity),
+            greeting=greeting,
+            metadata=session.metadata.model_dump(mode="json"),
+            authenticated_user_id=session.metadata.authenticated_user_id,
+        )
+
+    async def transfer_session(
+        self,
+        db: AsyncSession,
+        session_id: UUID,
+        anonymous_user_id: UUID,
+        authenticated_user_id: UUID,
+    ) -> TransferSessionResponse | None:
+        anonymous_user = await self._get_user_by_anonymous_id(db, anonymous_user_id)
+        if anonymous_user is None:
+            return None
+
+        authenticated_user = await db.get(User, authenticated_user_id)
+        if authenticated_user is None:
+            return None
+
+        session = await self._sessions.transfer(
+            from_user_id=anonymous_user.id,
+            to_user_context=self._to_user_context(authenticated_user),
+            session_id=session_id,
+        )
+        if session is None:
+            return None
+
+        if session.conversation_id is not None:
+            conversation = await self._messages.verify_conversation_owner(
+                db,
+                session.conversation_id,
+                anonymous_user.id,
+            )
+            if conversation is not None:
+                conversation.user_id = authenticated_user.id
+                await db.commit()
+
+        return TransferSessionResponse(
+            session_id=session.session_id,
+            conversation_id=session.conversation_id,
+            anonymous_user_id=anonymous_user_id,
+            authenticated_user_id=authenticated_user_id,
+            expires_at=self._expires_at(session.last_activity),
+        )

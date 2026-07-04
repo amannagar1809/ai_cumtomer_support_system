@@ -1,0 +1,95 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: ai_support_postgres
+    environment:
+      POSTGRES_DB: ai_support
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    # Host 15432 avoids conflict with local Windows PostgreSQL (often 5432/5433)
+    ports:
+      - "15432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - postgres_wal_archive:/wal_archive
+      - ./backend/db/postgres/init-primary:/docker-entrypoint-initdb.d:ro
+    command:
+      - postgres
+      - -c
+      - wal_level=replica
+      - -c
+      - max_wal_senders=5
+      - -c
+      - max_replication_slots=5
+      - -c
+      - hot_standby=on
+      - -c
+      - archive_mode=on
+      - -c
+      - archive_command=test ! -f /wal_archive/%f && cp %p /wal_archive/%f
+      - -c
+      - wal_compression=on
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ai_support"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  postgres-replica:
+    image: postgres:16
+    container_name: ai_support_postgres_replica
+    profiles: ["replica"]
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ai_support
+      POSTGRES_PRIMARY_HOST: postgres
+      REPLICATOR_PASSWORD: replicator_pass
+    ports:
+      - "15433:5432"
+    volumes:
+      - postgres_replica_data:/var/lib/postgresql/data
+      - ./backend/db/postgres/replica-entrypoint.sh:/replica-entrypoint.sh:ro
+    entrypoint: ["/bin/bash", "/replica-entrypoint.sh"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres-backup:
+    image: postgres:16
+    container_name: ai_support_postgres_backup
+    profiles: ["backup"]
+    environment:
+      PGHOST: postgres
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: ai_support
+      BACKUP_DIR: /backups
+      RETENTION_DAYS: 35
+    volumes:
+      - ./backups/postgres:/backups
+      - ./backend/scripts/db/backup.sh:/scripts/backup.sh:ro
+    entrypoint: ["/bin/sh", "-c", "chmod +x /scripts/backup.sh && while true; do /scripts/backup.sh; sleep 86400; done"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  redis:
+    image: redis:7
+    container_name: ai_support_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./backend/db/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres_data:
+  postgres_replica_data:
+  postgres_wal_archive:
